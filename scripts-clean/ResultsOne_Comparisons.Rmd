@@ -1,0 +1,802 @@
+---
+title: "Results One - Candidate Models Comparisons clean"
+author: "SYC"
+date: "2026-05-02"
+output: html_document
+---
+
+## Packages
+```{r}
+
+library(flextable)
+library(officer)
+library(tidyr)
+library(dplyr)
+library(gt)
+library(corx)
+library(rmarkdown)
+library(broom)
+library(stringr)
+library(forestplot)
+library(purrr)
+library(moments)
+library(readr)
+
+```
+
+## Candidate BrainAge Models
+### Sex-specific only (Full-Span Models)
+```{r}
+
+df.m <- read.csv('/output/brainage_m.csv')
+
+rename.cols <- colnames(df.m)[7:12]
+rename.cols <- substr(rename.cols, start = 1, stop = 11)
+rename.cols <- paste(rename.cols, "sex", sep="_")
+
+df.m2 <- df.m %>%
+  mutate(sex = "Male")
+
+colnames(df.m2)[7:12] <- rename.cols 
+
+df.f <- read.csv('/output/brainage_f.csv')
+
+df.f2 <- df.f %>%
+  mutate(sex = "Female")
+
+colnames(df.f2)[7:12] <- rename.cols 
+
+df.all_sex <- rbind(df.f2, df.m2)
+
+rm(df.m, df.f)
+
+```
+
+### Sex and Phase specific 
+```{r}
+
+df.m1 <- read.csv('/output/brainage_sep_m1.csv')
+
+df.m2 <- read.csv('/output/brainage_sep_m2.csv')
+
+df.f1 <- read.csv('/output/brainage_sep_f1.csv')
+
+df.f2 <- read.csv('/output/brainage_sep_f2.csv')
+
+df.all <- rbind(df.m1, df.m2, df.f1, df.f2)
+
+colnames(df.all)[7:12] <- paste(colnames(df.all)[7:12], "phase", sep="_")
+
+df.all_phase <- df.all
+
+rm(df.m1, df.m2, df.f1, df.f2, df.all)
+
+```
+
+### Merge
+```{r}
+
+df.all <- merge(df.all_sex, df.all_phase, by = c("subjid", "id", "ScanAge", "time", "batch", "ds", "sex"), sort = FALSE)
+
+```
+
+## Table 1: Model Metrics
+**Table 1A and Table 1B**
+```{r}
+
+own.ba.sum <- df.all %>%
+  gather(key = "model", value = "BrainAge", -subjid, -id, -ScanAge, -time, -batch, -ds, -sex, -phase) %>%
+  mutate(BrainPAD = BrainAge - ScanAge) %>%
+  mutate(AE = abs(ScanAge - BrainAge))
+
+sumtable1 <- own.ba.sum %>%
+  group_by(model, sex, phase) %>%
+  summarise(across(c(BrainAge, BrainPAD, AE), list(
+    mean = ~mean(., na.rm = TRUE), 
+    sd = ~sd(., na.rm = TRUE), 
+    med = ~median(., na.rm = TRUE), 
+    iqr = ~IQR(., na.rm = TRUE))), 
+    cor_results = list(tidy(cor.test(BrainAge, ScanAge, use = "complete.obs"))),
+    .groups = "drop") %>%
+  unnest(cor_results) %>%
+  mutate(across(where(is.numeric), ~round(.x, 2))) %>%
+  arrange(model, desc(phase)) %>%
+  rename(corr_r = estimate) %>%
+  rename(corr_lowci = conf.low) %>%
+  rename(corr_highci = conf.high) %>%
+  select(-statistic, -p.value, -parameter, -method, -alternative)
+
+```
+
+#### Early-Childhood Phase Median/IQR
+```{r}
+
+p1_med <- sumtable1 %>%
+  ungroup(.) %>%
+  filter(phase == "Early-Childhood") %>%
+  mutate(Type = ifelse(
+    str_detect(model, "phase"), "Phase-Specific", ifelse(
+    str_detect(model, "sex"), "Full-Span", NA ))) %>%
+  mutate(Model = str_to_upper(str_split_i(model, "_", 3))) %>%
+  mutate("Median PAD (IQR)" = paste(BrainPAD_med, " (", BrainPAD_iqr, ")", sep = "")) %>%
+  mutate("MAE (IQR)" = paste(AE_med, " (", AE_iqr, ")", sep = "")) %>% 
+  mutate("Age r [95% CI]" = paste(corr_r, " [", corr_lowci, ", ", corr_highci, "]", sep = "")) %>%
+  select(Model, Type, sex, `Median PAD (IQR)`, `MAE (IQR)`, `Age r [95% CI]`) %>%
+  pivot_longer(cols = c(-Model, -Type, -sex), names_to = "Stat", values_to = "Med_IQR") %>%
+  pivot_wider(names_from = Model, values_from = Med_IQR) %>%
+  select(Stat, sex, Type, S1, S2, F1, A1, A2, A3) %>%
+  arrange(desc(Stat), sex, Type) %>%
+  gt(rowname_col = "Stat", groupname_col = "sex") %>%
+  tab_spanner(
+    label = "Model Features", 
+    columns = c(S1, S2, F1, A1, A2, A3)
+  ) %>%
+  tab_stubhead(
+    label = "Metric"
+  ) %>%
+  tab_style(
+    style = cell_fill(color = "lightblue"),
+    locations = cells_body(rows = Type == "Phase-Specific") 
+  )
+
+p1_med
+
+p1_med %>%
+  gtsave('/figs/tab_p1med.docx')
+
+```
+
+#### Late-childhood Phase Median/IQR
+```{r}
+
+p2_med <- sumtable1 %>%
+  ungroup(.) %>%
+  filter(phase == "Late-Childhood") %>%
+  mutate(Type = ifelse(
+    str_detect(model, "phase"), "Phase-Specific", ifelse(
+    str_detect(model, "sex"), "Full-Span", NA ))) %>%
+  mutate(Model = str_to_upper(str_split_i(model, "_", 3))) %>%
+  mutate("Median PAD (IQR)" = paste(BrainPAD_med, " (", BrainPAD_iqr, ")", sep = "")) %>%
+  mutate("MAE (IQR)" = paste(AE_med, " (", AE_iqr, ")", sep = "")) %>% 
+  mutate("Age r [95% CI]" = paste(corr_r, " [", corr_lowci, ", ", corr_highci, "]", sep = "")) %>%
+  select(Model, Type, sex, `Median PAD (IQR)`, `MAE (IQR)`, `Age r [95% CI]`) %>%
+  pivot_longer(cols = c(-Model, -Type, -sex), names_to = "Stat", values_to = "Med_IQR") %>%
+  pivot_wider(names_from = Model, values_from = Med_IQR) %>%
+  select(Stat, sex, Type, S1, S2, F1, A1, A2, A3) %>%
+  arrange(desc(Stat), sex, Type) %>%
+  gt(rowname_col = "Stat", groupname_col = "sex") %>%
+  tab_spanner(
+    label = "Model Features", 
+    columns = c(S1, S2, F1, A1, A2, A3)
+  ) %>%
+  tab_stubhead(
+    label = "Metric"
+  ) %>%
+  tab_style(
+    style = cell_fill(color = "lightblue"),
+    locations = cells_body(rows = Type == "Phase-Specific") 
+  )
+
+p2_med
+
+p2_med %>%
+  gtsave('/figs/tab_p2med.docx')
+
+```
+
+
+## Subgroup Comparisons
+### Prep
+```{r}
+
+source('/scripts/functions/make_reg_tab.R')
+
+cory <- colnames(df.all)[8:19]
+
+```
+
+### BRACO vs SPRESTO/GUSTO
+```{r}
+
+gsb <- df.all %>%
+  filter(phase == "Early-Childhood") %>%
+  mutate(braco = ifelse(ds == "braco", 1, 0)) %>%
+  group_by(subjid) %>%
+  mutate(id.count = row_number()) %>%
+  filter(id.count == 1)
+
+lm0 <- lm(gpb_pred_a3_phase ~ braco*sex + ScanAge, data = gsb)
+summary(lm0)
+
+#df.gsb.order <- gsb %>%
+#  select(subjid, time) 
+
+#write_csv(df.gsb.order, '/figs/id_order/gsb.order.csv')
+
+```
+
+```{r}
+
+# Use map to run the models and combine them
+all_results <- map_df(cory, function(out) {
+  formula <- as.formula(paste(out, "~ braco + ScanAge"))
+  model <- lm(formula, data = gsb)
+  
+  # Turn the model results into a data frame
+  tidy(model, conf.int = TRUE) %>%
+    mutate(outcome_var = out) 
+})
+
+# Filter to show ONLY the 'Group' effect across all outcomes
+gsb_p <- all_results %>% 
+  filter(term == "braco") %>%
+  mutate(
+    p_label = ifelse(p.value < .001, "p < .001", paste0("p = ", round(p.value, 3))),
+    is_sig = ifelse(p.value < 0.05, "bold", "plain")
+  ) %>%
+  mutate(model = outcome_var) %>%
+  mutate(model = str_replace(model, fixed("gpb_pred_"), ""))  %>%
+  separate(model, c("Feature", "Type"), "_") %>%
+  mutate(Feature = toupper(Feature)) %>%
+  mutate(Type = ifelse(
+    Type == "sex", "Full-Span", ifelse(
+    Type == "phase", "Phase-Specific", Type
+  ))) %>%
+  mutate(Feature = factor(Feature, levels = rev(c("S1", "S2", "F1", "A1", "A2", "A3")))) %>%
+  mutate(Type = factor(Type, levels = c("Full-Span", "Phase-Specific")))
+
+```
+
+#### Plot
+```{r}
+
+fig2a <- gsb_p %>%
+  ggplot(aes(x = estimate, y = Feature)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") + # Null line
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.1) +
+  geom_point(size = 2.2, color = "midnightblue", shape = 18) +
+  geom_text(aes(label = p_label, fontface = is_sig), 
+            vjust = -1, size = 2) +
+  facet_grid(Type ~ ., scales = "free_y", space = "free_y") + 
+  scale_y_discrete(expand = expansion(add = c(0.5, 1))) +
+  theme_minimal(base_size = 8) +  
+  labs(
+    title = "Early-Childhood: BRACO relative to GUSTO/S-PRESTO",
+    subtitle = "N = 359",
+    x = "Regression Coefficient (95% CI)",
+    y = "BrainAge Model"
+  ) + 
+  theme(            
+    panel.spacing = unit(1, "lines"),         # Adds a bit of gap between groups
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, face = "italic")  
+    ) 
+
+fig2a
+
+```
+
+#### Save
+```{r}
+setwd('/figs')
+
+pdf(file="fplot_fig2a.pdf", width=4, height=3)
+fig2a
+dev.off()
+```
+
+#### Table 
+```{r}
+
+gsb_tab <- make_reg_tab(gsb_p, "BRACO")
+
+gsb_tab
+
+save_as_docx(gsb_tab, path = '/figs/supp/regression_tab/gsb_one.docx')
+
+
+```
+
+### YSR
+```{r}
+
+ysr_y13 <- read_excel('/original/GUSTO_Y13_YSR 11-18 - Child_20250731.xlsx')
+
+ysr_y13 <- ysr_y13 %>%
+  select(subjid, ysr_cage, contains("ss"), contains("dsm"), contains("ysr_2007"),ysr_tot, ysr_tott) %>%
+  select(!contains("pct")) %>%
+  mutate(ysr_cat = ifelse(ysr_tott > 63, 1, 0))
+
+df.ysr <- merge(df.all, ysr_y13, by = c("subjid"))
+
+df.ysr <- df.ysr %>%
+  filter(time == 5)   
+
+lm0 <- lm(gpb_pred_a3_phase ~ ysr_cat*sex + ScanAge, data = df.ysr)
+summary(lm0)
+
+df.ysr_m <- df.ysr %>%
+  filter(sex == "Male")
+
+df.ysr_f <- df.ysr %>%
+  filter(sex == "Female")
+
+```
+
+#### Females
+```{r}
+
+# Use map to run the models and combine them
+all_results <- map_df(cory, function(out) {
+  
+  formula <- as.formula(paste(out, "~ ysr_cat + ScanAge"))
+  model <- lm(formula, data = df.ysr_f)
+  
+  # Turn the model results into a data frame
+  tidy(model, conf.int = TRUE) %>%
+    mutate(outcome_var = out) 
+})
+
+# Filter to show ONLY the 'Group' effect across all outcomes
+ysr_f_p <- all_results %>% 
+  filter(term == "ysr_cat") %>%
+  mutate(
+    p_label = ifelse(p.value < .001, "p < .001", paste0("p = ", round(p.value, 3))),
+    is_sig = ifelse(p.value < 0.05, "bold", "plain")
+  ) %>%
+  mutate(model = outcome_var) %>%
+  mutate(model = str_replace(model, fixed("gpb_pred_"), ""))  %>%
+  separate(model, c("Feature", "Type"), "_") %>%
+  mutate(Feature = toupper(Feature)) %>%
+  mutate(Type = ifelse(
+    Type == "sex", "Full-Span", ifelse(
+    Type == "phase", "Phase-Specific", Type
+  ))) %>%
+  mutate(Feature = factor(Feature, levels = rev(c("S1", "S2", "F1", "A1", "A2", "A3")))) %>%
+  mutate(Type = factor(Type, levels = c("Full-Span", "Phase-Specific")))
+
+
+```
+
+#### Female Plot
+```{r}
+
+fig2b <- ysr_f_p %>%
+  ggplot(aes(x = estimate, y = Feature)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") + # Null line
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.1) +
+  geom_point(size = 2.2, color = "midnightblue", shape = 18) +
+  geom_text(aes(label = p_label, fontface = is_sig), 
+            vjust = -1, size = 2) +
+  facet_grid(Type ~ ., scales = "free_y", space = "free_y") + 
+  scale_y_discrete(expand = expansion(add = c(0.5, 1))) +
+  theme_minimal(base_size = 8) +  
+  labs(
+    title = "Females at Y13.5: YSR Total Problems > 63",
+    subtitle = "N = 37",
+    x = "Regression Coefficient (95% CI)",
+    y = "BrainAge Model"
+  ) + 
+  theme(            
+    panel.spacing = unit(1, "lines"),         # Adds a bit of gap between groups
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, face = "italic")  
+    ) 
+
+fig2b
+
+```
+
+#### Save
+```{r}
+setwd('/figs')
+
+pdf(file="fplot_fig2b.pdf", width=4, height=3)
+fig2b
+dev.off()
+```
+
+#### Table 
+```{r}
+
+ysr_f_tab <- make_reg_tab(ysr_f_p, "High YSR Total (Females)")
+
+ysr_f_tab
+
+save_as_docx(ysr_f_tab, path = '/figs/supp/regression_tab/ysr_f_one.docx')
+
+```
+
+#### Males
+```{r}
+
+# Use map to run the models and combine them
+all_results <- map_df(cory, function(out) {
+  
+  formula <- as.formula(paste(out, "~ ysr_cat + ScanAge"))
+  model <- lm(formula, data = df.ysr_m)
+  
+  # Turn the model results into a data frame
+  tidy(model, conf.int = TRUE) %>%
+    mutate(outcome_var = out) 
+})
+
+# Filter to show ONLY the 'Group' effect across all outcomes
+ysr_m_p <- all_results %>% 
+  filter(term == "ysr_cat") %>%
+  mutate(
+    p_label = ifelse(p.value < .001, "p < .001", paste0("p = ", round(p.value, 3))),
+    is_sig = ifelse(p.value < 0.05, "bold", "plain")
+  ) %>%
+  mutate(model = outcome_var) %>%
+  mutate(model = str_replace(model, fixed("gpb_pred_"), ""))  %>%
+  separate(model, c("Feature", "Type"), "_") %>%
+  mutate(Feature = toupper(Feature)) %>%
+  mutate(Type = ifelse(
+    Type == "sex", "Full-Span", ifelse(
+    Type == "phase", "Phase-Specific", Type
+  ))) %>%
+  mutate(Feature = factor(Feature, levels = rev(c("S1", "S2", "F1", "A1", "A2", "A3")))) %>%
+  mutate(Type = factor(Type, levels = c("Full-Span", "Phase-Specific")))
+
+
+```
+
+
+#### Male Plot
+```{r}
+
+fig2c <- ysr_m_p %>%
+  ggplot(aes(x = estimate, y = Feature)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") + # Null line
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.1) +
+  geom_point(size = 2.2, color = "midnightblue", shape = 18) +
+  geom_text(aes(label = p_label, fontface = is_sig), 
+            vjust = -1, size = 2) +
+  facet_grid(Type ~ ., scales = "free_y", space = "free_y") + 
+  # Expand the y-axis slightly so labels don't get cut off at the top
+  scale_y_discrete(expand = expansion(add = c(0.5, 1))) +
+  theme_minimal(base_size = 8) +  
+  labs(
+    title = "Males at Y13.5: YSR Total Problems > 63",
+    subtitle = "N = 44",
+    x = "Regression Coefficient (95% CI)",
+    y = "BrainAge Model"
+  ) + 
+  theme(            
+    panel.spacing = unit(1, "lines"),         # Adds a bit of gap between groups
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, face = "italic")  
+    ) 
+
+fig2c
+
+```
+
+#### Save
+```{r}
+setwd('/figs')
+
+pdf(file="fplot_fig2c.pdf", width=4, height=3)
+fig2c
+dev.off()
+```
+
+#### Table 
+```{r}
+
+ysr_m_tab <- make_reg_tab(ysr_m_p, "High YSR Total (Males)")
+
+ysr_m_tab
+
+save_as_docx(ysr_m_tab, path = '/figs/supp/regression_tab/ysr_m_one.docx')
+
+```
+
+
+### ELA
+```{r}
+
+prob.id <- read.csv('/data/prob_ids.csv')
+
+ela <- read.csv('/original/ELA/ela_final.csv')
+
+df.ela <- merge(df.all, ela, by = c("subjid"))
+
+df.ela <- df.ela %>%
+  filter(phase == "Early-Childhood") %>%
+  group_by(subjid) %>%
+  mutate(id.count = row_number()) %>%
+  filter(id.count == 1) %>% 
+  mutate(ela_cat = ifelse(A_index_prenatal > 2, 1, 0))  
+
+lm0 <- lm(gpb_pred_a3_phase ~ A_index_prenatal*sex + ScanAge, data = df.ela)
+summary(lm0)
+
+#df.ela.order <- df.ela %>%
+#  select(subjid, time) 
+
+#write_csv(df.ela.order, '/figs/id_order/ela.order.csv')
+```
+
+```{r}
+
+# Use map to run the models and combine them
+all_results <- map_df(cory, function(out) {
+  
+  formula <- as.formula(paste(out, "~ A_index_prenatal + ScanAge"))
+  model <- lm(formula, data = df.ela)
+  
+  # Turn the model results into a data frame
+  tidy(model, conf.int = TRUE) %>%
+    mutate(outcome_var = out) 
+})
+
+# Filter to show ONLY the 'Group' effect across all outcomes
+ela_p <- all_results %>% 
+  filter(term == "A_index_prenatal") %>%
+  mutate(
+    p_label = ifelse(p.value < .001, "p < .001", paste0("p = ", round(p.value, 3))),
+    is_sig = ifelse(p.value < 0.05, "bold", "plain")
+  ) %>%
+  mutate(model = outcome_var) %>%
+  mutate(model = str_replace(model, fixed("gpb_pred_"), ""))  %>%
+  separate(model, c("Feature", "Type"), "_") %>%
+  mutate(Feature = toupper(Feature)) %>%
+  mutate(Type = ifelse(
+    Type == "sex", "Full-Span", ifelse(
+    Type == "phase", "Phase-Specific", Type
+  ))) %>%
+  mutate(Feature = factor(Feature, levels = rev(c("S1", "S2", "F1", "A1", "A2", "A3")))) %>%
+  mutate(Type = factor(Type, levels = c("Full-Span", "Phase-Specific")))
+
+
+```
+
+#### Plot
+```{r}
+
+fig2d <- ela_p %>%
+  ggplot(aes(x = estimate, y = Feature)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") + # Null line
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.1) +
+  geom_point(size = 2.2, color = "midnightblue", shape = 18) +
+  geom_text(aes(label = p_label, fontface = is_sig), 
+            vjust = -1, size = 2) +
+  facet_grid(Type ~ ., scales = "free_y", space = "free_y") + 
+  # Expand the y-axis slightly so labels don't get cut off at the top
+  scale_y_discrete(expand = expansion(add = c(0.5, 1))) +
+  theme_minimal(base_size = 8) +  
+  labs(
+    title = "Early-Childhood: Cumulative Early Life Adversity (ELA)",
+    subtitle = "N = 93",
+    x = "Regression Coefficient (95% CI)",
+    y = "BrainAge Model"
+  ) + 
+  theme(            
+    panel.spacing = unit(1, "lines"),         # Adds a bit of gap between groups
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, face = "italic")  
+    ) 
+
+fig2d
+
+```
+
+#### Save
+```{r}
+setwd('/figs')
+
+pdf(file="fplot_fig2d.pdf", width=4, height=3)
+fig2b
+dev.off()
+```
+
+#### Table 
+```{r}
+
+ela_tab <- make_reg_tab(ela_p, "Cumulative ELA")
+
+ela_tab
+
+save_as_docx(ela_tab, path = '/figs/supp/regression_tab/ela_one.docx')
+
+```
+
+### PSS
+```{r}
+
+pss <- read_excel('/original/GUSTO_Y10_PSS_20211215.xlsx')
+
+quantile(pss$pss_totscore, 0.9, na.rm = TRUE)
+## 22
+
+pss <- pss %>%
+  filter(!is.na(pss_totscore)) %>%
+  select(subjid, contains("totscore")) %>%
+  mutate(pss_cat = ifelse(pss_totscore > 21, 1, 0))  
+
+df.pss <- merge(df.all, pss, by = c("subjid"))
+
+df.pss <- df.pss %>%
+  filter(time == 4)
+
+lm0 <- lm(gpb_pred_a3_phase ~ pss_cat*sex + ScanAge, data = df.pss)
+summary(lm0)
+
+df.pss_m <- df.pss %>%
+  filter(sex == "Male")
+
+df.pss_f <- df.pss %>%
+  filter(sex == "Female") 
+
+```
+
+```{r}
+
+# Use map (a better for-loop) to run the models and combine them
+all_results <- map_df(cory, function(out) {
+
+  formula <- as.formula(paste(out, "~ pss_cat + ScanAge"))
+  model <- lm(formula, data = df.pss_f)
+  
+  # Turn the model results into a data frame
+  tidy(model, conf.int = TRUE) %>%
+    mutate(outcome_var = out) 
+})
+
+# Filter to show ONLY the 'Group' effect across all outcomes
+pss_f_p <- all_results %>% 
+  filter(term == "pss_cat") %>%
+  mutate(
+    p_label = ifelse(p.value < .001, "p < .001", paste0("p = ", round(p.value, 3))),
+    is_sig = ifelse(p.value < 0.05, "bold", "plain")
+  ) %>%
+  mutate(model = outcome_var) %>%
+  mutate(model = str_replace(model, fixed("gpb_pred_"), ""))  %>%
+  separate(model, c("Feature", "Type"), "_") %>%
+  mutate(Feature = toupper(Feature)) %>%
+  mutate(Type = ifelse(
+    Type == "sex", "Full-Span", ifelse(
+    Type == "phase", "Phase-Specific", Type
+  ))) %>%
+  mutate(Feature = factor(Feature, levels = rev(c("S1", "S2", "F1", "A1", "A2", "A3")))) %>%
+  mutate(Type = factor(Type, levels = c("Full-Span", "Phase-Specific")))
+
+
+```
+
+#### Female Plot
+```{r}
+
+fig2e <- pss_f_p %>%
+  ggplot(aes(x = estimate, y = Feature)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") + # Null line
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.1) +
+  geom_point(size = 2.2, color = "midnightblue", shape = 18) +
+  geom_text(aes(label = p_label, fontface = is_sig), 
+            vjust = -1, size = 2) +
+  facet_grid(Type ~ ., scales = "free_y", space = "free_y") + 
+  # Expand the y-axis slightly so labels don't get cut off at the top
+  scale_y_discrete(expand = expansion(add = c(0.5, 1))) +
+  theme_minimal(base_size = 8) +  
+  labs(
+    title = "Females at Y10.5: PSS Total Score > 21",
+    subtitle = "N = 40",
+    x = "Regression Coefficient (95% CI)",
+    y = "BrainAge Model"
+  ) + 
+  theme(            
+    panel.spacing = unit(1, "lines"),         # Adds a bit of gap between groups
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, face = "italic")  
+    ) 
+
+fig2e
+
+```
+
+#### Save
+```{r}
+setwd('/figs')
+
+pdf(file="fplot_fig2e.pdf", width=4, height=3)
+fig2e
+dev.off()
+```
+
+#### Table 
+```{r}
+
+pss_f_tab <- make_reg_tab(pss_f_p, "High PSS (Females)")
+
+pss_f_tab
+
+save_as_docx(pss_f_tab, path = '/figs/supp/regression_tab/pss_f_one.docx')
+
+```
+
+
+```{r}
+
+# Use map (a better for-loop) to run the models and combine them
+all_results <- map_df(cory, function(out) {
+
+  formula <- as.formula(paste(out, "~ pss_cat + ScanAge"))
+  model <- lm(formula, data = df.pss_m)
+  
+  # Turn the model results into a data frame
+  tidy(model, conf.int = TRUE) %>%
+    mutate(outcome_var = out) 
+})
+
+# Filter to show ONLY the 'Group' effect across all outcomes
+pss_m_p <- all_results %>% 
+  filter(term == "pss_cat") %>%
+  mutate(
+    p_label = ifelse(p.value < .001, "p < .001", paste0("p = ", round(p.value, 3))),
+    is_sig = ifelse(p.value < 0.05, "bold", "plain")
+  ) %>%
+  mutate(model = outcome_var) %>%
+  mutate(model = str_replace(model, fixed("gpb_pred_"), ""))  %>%
+  separate(model, c("Feature", "Type"), "_") %>%
+  mutate(Feature = toupper(Feature)) %>%
+  mutate(Type = ifelse(
+    Type == "sex", "Full-Span", ifelse(
+    Type == "phase", "Phase-Specific", Type
+  ))) %>%
+  mutate(Feature = factor(Feature, levels = rev(c("S1", "S2", "F1", "A1", "A2", "A3")))) %>%
+  mutate(Type = factor(Type, levels = c("Full-Span", "Phase-Specific")))
+
+
+```
+
+#### Male Plot
+```{r}
+
+fig2f <- pss_m_p %>%
+  ggplot(aes(x = estimate, y = Feature)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") + # Null line
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.1) +
+  geom_point(size = 2.2, color = "midnightblue", shape = 18) +
+  geom_text(aes(label = p_label, fontface = is_sig), 
+            vjust = -1, size = 2) +
+  facet_grid(Type ~ ., scales = "free_y", space = "free_y") + 
+  # Expand the y-axis slightly so labels don't get cut off at the top
+  scale_y_discrete(expand = expansion(add = c(0.5, 1))) +
+  theme_minimal(base_size = 8) +  
+  labs(
+    title = "Males at Y10.5: PSS Total Score > 21",
+    subtitle = "N = 55",
+    x = "Regression Coefficient (95% CI)",
+    y = "BrainAge Model"
+  ) + 
+  theme(            
+    panel.spacing = unit(1, "lines"),         # Adds a bit of gap between groups
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, face = "italic")  
+    ) 
+
+fig2f
+
+```
+
+#### Save
+```{r}
+setwd('/figs')
+
+pdf(file="fplot_fig2f.pdf", width=4, height=3)
+fig2f
+dev.off()
+```
+
+#### Table 
+```{r}
+
+pss_m_tab <- make_reg_tab(pss_m_p, "High PSS (Males)")
+
+pss_m_tab
+
+save_as_docx(pss_m_tab, path = '/figs/supp/regression_tab/pss_m_one.docx')
+
+```

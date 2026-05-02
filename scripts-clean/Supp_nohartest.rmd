@@ -1,0 +1,188 @@
+---
+title: "Supp - Sensitivity Analyses - No Harmonization Test Dataset"
+author: "SYC"
+date: "2026-05-02"
+output: html_document
+---
+
+```{r}
+
+library(readxl)
+library(stringr)
+library(dplyr)
+library(data.table)
+library(gpboost)
+
+```
+
+### Load Models
+```{r}
+
+a2.out.m1 <- readRDS.gpb.Booster("/output/models/a2_m1_phase.rds")
+
+a2.out.m2 <- readRDS.gpb.Booster('/output/models/a2_m2_phase.rds')
+
+a2.out.f1 <- readRDS.gpb.Booster("/output/models/a2_f1_phase.rds")
+
+a2.out.f2 <- readRDS.gpb.Booster('/output/models/a2_f2_phase.rds')
+
+```
+
+## No Harmonization A2
+```{r}
+
+dfe.nohar <- read.csv('/data/dfe_nohar.csv')
+
+dfe.nohar <- dfe.nohar %>%
+  filter(test == 1)
+
+```
+
+### Males Phase 1
+```{r}
+
+nh_test_m1 <- test_dat1.m %>%
+  select(subjid, id, ScanAge, time)
+
+nh_test_m1 <- merge(nh_test_m1, dfe.nohar, by = c("subjid", "ScanAge", "time"), all.x = TRUE)
+
+colnames(nh_test_m1)[9:244] <- paste(colnames(nh_test_m1)[9:244], ".combat", sep = "") 
+
+data_test <- nh_test_m1 %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right"), starts_with("Int"), modularity.combat) %>%
+  as.matrix()
+
+pred_vars <- colnames(data_test)[3:221]
+
+pred <- predict(a2.out.m1, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+nh_test_m1$gpb_pred_a2_nh <- pred[["response_mean"]]
+
+nh_test_m1 <- nh_test_m1 %>%
+  select(subjid, id, ScanAge, time, batch, ds, gpb_pred_a2_nh)    
+
+```
+
+### Males Phase 2
+```{r}
+
+nh_test_m2 <- test_dat2.m %>%
+  select(subjid, id, ScanAge, time)
+
+nh_test_m2 <- merge(nh_test_m2, dfe.nohar, by = c("subjid", "ScanAge", "time"), all.x = TRUE)
+
+colnames(nh_test_m2)[9:244] <- paste(colnames(nh_test_m2)[9:244], ".combat", sep = "") 
+
+data_test <- nh_test_m2 %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right"), starts_with("Int"), modularity.combat) %>%
+  as.matrix()
+
+#pred_vars <- colnames(data_test)[3:221]
+
+pred <- predict(a2.out.m2, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+nh_test_m2$gpb_pred_a2_nh <- pred[["response_mean"]]
+
+nh_test_m2 <- nh_test_m2 %>%
+  select(subjid, id, ScanAge, time, batch, ds, gpb_pred_a2_nh)  
+
+nh_test_m2 <- nh_test_m2 %>%
+  arrange(subjid, time)
+
+```
+
+### Females Phase 1
+```{r}
+
+nh_test_f1 <- test_dat1.f %>%
+  select(subjid, id, ScanAge, time)
+
+nh_test_f1 <- merge(nh_test_f1, dfe.nohar, by = c("subjid", "ScanAge", "time"), all.x = TRUE)
+
+colnames(nh_test_f1)[9:244] <- paste(colnames(nh_test_f1)[9:244], ".combat", sep = "") 
+
+data_test <- nh_test_f1 %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right"), starts_with("Int"), modularity.combat) %>%
+  as.matrix()
+
+#pred_vars <- colnames(data_test)[3:221]
+
+pred <- predict(a2.out.f1, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+nh_test_f1$gpb_pred_a2_nh <- pred[["response_mean"]]
+
+nh_test_f1 <- nh_test_f1 %>%
+  select(subjid, id, ScanAge, time, batch, ds, gpb_pred_a2_nh)    
+
+```
+
+
+### Females Phase 2
+```{r}
+
+nh_test_f2 <- test_dat2.f %>%
+  select(subjid, id, ScanAge, time)
+
+nh_test_f2 <- merge(nh_test_f2, dfe.nohar, by = c("subjid", "ScanAge", "time"), all.x = TRUE)
+
+colnames(nh_test_f2)[9:244] <- paste(colnames(nh_test_f2)[9:244], ".combat", sep = "") 
+
+data_test <- nh_test_f2 %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right"), starts_with("Int"), modularity.combat) %>%
+  as.matrix()
+
+#pred_vars <- colnames(data_test)[3:221]
+
+pred <- predict(a2.out.f2, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+nh_test_f2$gpb_pred_a2_nh <- pred[["response_mean"]]
+
+nh_test_f2 <- nh_test_f2 %>%
+  select(subjid, id, ScanAge, time, batch, ds, gpb_pred_a2_nh)  
+
+nh_test_f2 <- nh_test_f2 %>%
+  arrange(subjid, time)
+
+```
+
+### Combine 
+```{r}
+
+nh_test_m1 <- nh_test_m1 %>%
+  mutate(sex = "Male") %>%
+  mutate(phase = "Early-Childhood")  
+
+nh_test_m2 <- nh_test_m2 %>%
+  mutate(sex = "Male") %>%
+  mutate(phase = "Late-Childhood")
+  
+nh_test_f1 <- nh_test_f1 %>%
+  mutate(sex = "Female") %>%
+  mutate(phase = "Early-Childhood")
+
+nh_test_f2 <- nh_test_f2 %>%
+  mutate(sex = "Female") %>%
+  mutate(phase = "Late-Childhood")
+
+a2_pred_nh <- rbind(nh_test_m1, nh_test_m2, nh_test_f1, nh_test_f2)
+
+write_csv(a2_pred_nh, '/figs/supp/motion/gpb_pred_a2_nh.csv')
+
+```
+

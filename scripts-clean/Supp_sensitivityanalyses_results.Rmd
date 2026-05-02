@@ -1,0 +1,779 @@
+---
+title: "Supp - Sensitivity Analyses - No Harmonization & Motion Results"
+author: "SYC"
+date: "2026-03-19"
+output: html_document
+---
+
+```{r}
+
+library(gt)
+library(flextable)
+library(officer)
+library(patchwork)
+library(broom)
+library(stringr)
+library(purrr)
+library(readr)
+library(Hmisc)
+library(corrplot)
+library(ggplot2)
+library(ggdist)
+library(tidyr)
+library(dplyr)
+```
+
+## Load data
+### BrainAge
+```{r}
+
+bage <- read_csv('/output/brainage_compiled.csv')
+
+ba.all_rm <- bage %>%
+  filter(!(subjid == "010-21794" & time == 1)) %>%
+  filter(!(subjid == "020-66082" & time == 2)) %>%
+  arrange(sex)
+
+ba_nh <- read_csv('/figs/supp/motion/gpb_pred_a2_nh.csv')
+
+common_col = intersect(colnames(bage), colnames(ba_nh))
+
+bage2 <- merge(bage, ba_nh, by = common_col, all.x = TRUE)
+
+bage2 <- bage2 %>%
+  select(all_of(common_col), gpb_pred_a2, gpb_pred_a2_nh)
+
+ba.all_rm2 <- merge(ba.all_rm, ba_nh, by = common_col, all.x = TRUE)
+
+cor.test(ba.all_rm2$gpb_pred_a2, ba.all_rm2$gpb_pred_a2_nh)
+
+```
+
+## Table - Harmonization (Supp Table S6)
+```{r}
+
+tab.ba <- ba.all_rm2 %>%
+  select(1:6, sex, phase, gpb_pred_a2, gpb_pred_a2_nh, ENIGMA_predage, centile_MR_predicted_age, DevBrainAge_predage, PyBrainAge_predage) %>%
+  gather(key = "model", value = "BrainAge", -subjid, -id, -ScanAge, -time, -batch, -ds, -sex, -phase)  %>%
+  mutate(BrainPAD = BrainAge - ScanAge) %>%
+  mutate(AE = abs(ScanAge - BrainAge)) %>%
+  mutate(Model = model %>%
+           fct_recode(
+    "Phase-Specific_A2" = "gpb_pred_a2", 
+    "Phase-Specific_A2 (NH)" = "gpb_pred_a2_nh",    
+    "ENIGMA" = "ENIGMA_predage",
+    "Centile" = "centile_MR_predicted_age",
+    "DevBrainAge" = "DevBrainAge_predage",
+    "PyBrainAge" = "PyBrainAge_predage") %>%
+      fct_relevel("Phase-Specific_A2", "Phase-Specific_A2 (NH)", "ENIGMA", "Centile", "DevBrainAge", "PyBrainAge"))  
+  
+
+sumtable1 <- tab.ba %>%
+  group_by(Model, sex, Phase) %>%
+  summarise(across(c(BrainAge, BrainPAD, AE), list(
+    mean = ~mean(., na.rm = TRUE), 
+    sd = ~sd(., na.rm = TRUE), 
+    med = ~median(., na.rm = TRUE), 
+    iqr = ~IQR(., na.rm = TRUE))), 
+    cor_results = list(tidy(cor.test(BrainAge, ScanAge, use = "complete.obs"))),
+    .groups = "drop") %>%
+  unnest(cor_results) %>%
+  mutate(across(where(is.numeric), ~round(.x, 2))) %>%
+  arrange(Model, desc(Phase)) %>%
+  rename(corr_r = estimate) %>%
+  rename(corr_lowci = conf.low) %>%
+  rename(corr_highci = conf.high) %>%
+  select(-statistic, -p.value, -parameter, -method, -alternative)
+
+```
+
+### Save table
+```{r}
+
+ba_tab_med <- sumtable1 %>%
+  ungroup(.) %>%
+  mutate("Median PAD (IQR)" = paste(BrainPAD_med, " (", BrainPAD_iqr, ")", sep = "")) %>%
+  mutate("MAE (IQR)" = paste(AE_med, " (", AE_iqr, ")", sep = "")) %>% 
+  mutate("Age r [95% CI]" = paste(corr_r, " [", corr_lowci, ", ", corr_highci, "]", sep = "")) %>%
+  select(Model, Phase, sex, `Median PAD (IQR)`, `MAE (IQR)`, `Age r [95% CI]`) %>%
+  pivot_longer(cols = c(-Model, -sex, -Phase), names_to = "Stat", values_to = "Med_IQR") %>%
+  pivot_wider(names_from = Model, values_from = Med_IQR) %>%
+  rename(Sex = sex) %>%
+  gt(rowname_col = "Stat", groupname_col = "Phase") %>%
+  tab_spanner(
+    label = "BrainAge Estimates", 
+    columns = c(`Phase-Specific_A2`, `Phase-Specific_A2 (NH)`, ENIGMA, Centile, DevBrainAge, PyBrainAge)
+  ) %>%  
+  tab_stubhead(
+    label = "Metric"
+  ) 
+
+ba_tab_med
+
+ba_tab_med %>%
+  gtsave('/figs/tab_balit_med_nh.docx')
+
+```
+
+### Table - Motion Subset (Supp Table S8)
+```{r}
+
+test_dat_mot <- test_dat_mot %>%
+  select(-id)
+
+ba.all_mot <- merge(test_dat_mot, ba.all_rm, by = c("subjid", "time", "ScanAge", "batch", "ds", "sex", "phase"), all.x = TRUE)
+
+cor.test(ba.all_mot$gpb_pred_a2_mot, ba.all_mot$gpb_pred_a2)
+
+```
+
+```{r}
+
+tab.ba_mot <- ba.all_mot %>%
+  select(1:5, sex, phase, gpb_pred_a2, gpb_pred_a2_mot, ENIGMA_predage, centile_MR_predicted_age, DevBrainAge_predage, PyBrainAge_predage) %>%
+  gather(key = "model", value = "BrainAge", -subjid, -ScanAge, -time, -batch, -ds, -sex, -phase)  %>%
+  mutate(BrainPAD = BrainAge - ScanAge) %>%
+  mutate(AE = abs(ScanAge - BrainAge)) %>%
+  mutate(Model = model %>%
+           fct_recode(
+    "Phase-Specific_A2" = "gpb_pred_a2", 
+    "Phase-Specific_A2 (M)" = "gpb_pred_a2_mot",    
+    "ENIGMA" = "ENIGMA_predage",
+    "Centile" = "centile_MR_predicted_age",
+    "DevBrainAge" = "DevBrainAge_predage",
+    "PyBrainAge" = "PyBrainAge_predage") %>%
+      fct_relevel("Phase-Specific_A2", "Phase-Specific_A2 (M)", "ENIGMA", "Centile", "DevBrainAge", "PyBrainAge")) 
+  
+
+sumtable_mot <- tab.ba_mot %>%
+  group_by(Model, sex, Phase) %>%
+  summarise(across(c(BrainAge, BrainPAD, AE), list(
+    mean = ~mean(., na.rm = TRUE), 
+    sd = ~sd(., na.rm = TRUE), 
+    med = ~median(., na.rm = TRUE), 
+    iqr = ~IQR(., na.rm = TRUE))), 
+    cor_results = list(tidy(cor.test(BrainAge, ScanAge, use = "complete.obs"))),
+    .groups = "drop") %>%
+  unnest(cor_results) %>%
+  mutate(across(where(is.numeric), ~round(.x, 2))) %>%
+  arrange(Model, desc(Phase)) %>%
+  rename(corr_r = estimate) %>%
+  rename(corr_lowci = conf.low) %>%
+  rename(corr_highci = conf.high) %>%
+  select(-statistic, -p.value, -parameter, -method, -alternative)
+
+
+```
+
+### Save table
+```{r}
+
+ba_tab_mot_med <- sumtable_mot %>%
+  ungroup(.) %>%
+  mutate("Median PAD (IQR)" = paste(BrainPAD_med, " (", BrainPAD_iqr, ")", sep = "")) %>%
+  mutate("MAE (IQR)" = paste(AE_med, " (", AE_iqr, ")", sep = "")) %>% 
+  mutate("Age r [95% CI]" = paste(corr_r, " [", corr_lowci, ", ", corr_highci, "]", sep = "")) %>%
+  select(Model, Phase, sex, `Median PAD (IQR)`, `MAE (IQR)`, `Age r [95% CI]`) %>%
+  pivot_longer(cols = c(-Model, -sex, -Phase), names_to = "Stat", values_to = "Med_IQR") %>%
+  pivot_wider(names_from = Model, values_from = Med_IQR) %>%
+  rename(Sex = sex) %>%
+  gt(rowname_col = "Stat", groupname_col = "Phase") %>%
+  tab_spanner(
+    label = "BrainAge Estimates", 
+    columns = c(`Phase-Specific_A2`, `Phase-Specific_A2 (M)`, ENIGMA, Centile, DevBrainAge, PyBrainAge)
+  ) %>%  
+  tab_stubhead(
+    label = "Metric"
+  ) 
+
+ba_tab_mot_med
+
+ba_tab_mot_med %>%
+  gtsave('/figs/supp/motion/tab_balit_med_mot.docx')
+
+```
+
+
+## Subgroup Comparisons (Supp Fig S3b)
+```{r}
+
+bage2 <- bage2 %>%
+  select(-id) %>%
+  rename(gpb_pred_a2_full = gpb_pred_a2)
+  
+ba.grp.df <- merge(bage2, ba.all_mot, by = c("subjid", "time", "ScanAge", "batch", "ds", "sex", "phase"), all.x = TRUE)
+  
+age.pred <- c("gpb_pred_a2_full", "gpb_pred_a2_nh", "gpb_pred_a2", "gpb_pred_a2_mot",  "ENIGMA_predage", "centile_MR_predicted_age", "DevBrainAge_predage", "PyBrainAge_predage")
+
+ba.grp.df <- ba.grp.df %>%
+  select(subjid, id, ScanAge, time, batch, ds, sex, all_of(age.pred), phase)
+
+```
+
+### BRACO vs SPRESTO/GUSTO
+```{r}
+
+gsb.order <- read_csv('/figs/id_order/gsb.order.csv')
+
+gsb.order <- gsb.order %>%
+  ungroup(.) %>%
+  mutate(order = row_number())
+
+gsb_1 <- merge(gsb.order, ba.grp.df, by = c("subjid", "time"), all.x = TRUE)
+
+gsb_1 <- gsb_1 %>%
+  filter(phase == "Early-Childhood") %>%
+  mutate(braco = ifelse(ds == "braco", 1, 0)) 
+
+test <- gsb_1 %>%
+  filter(!is.na(gpb_pred_a2)) ## N = 313
+
+table(test$braco)
+
+```
+
+#### BrainAge
+```{r}
+
+# Use map to run the models and combine them
+all_results <- map_df(age.pred, function(out) {
+  
+  formula <- as.formula(paste(out, "~ braco + ScanAge"))
+  model <- lm(formula, data = gsb_1)
+  
+  # Turn the model results into a data frame
+  tidy(model, conf.int = TRUE) %>%
+    mutate(outcome_var = out) 
+})
+
+# Filter to show ONLY the 'Group' effect across all outcomes
+gsb_p <- all_results %>% 
+  filter(term == "braco") %>%
+  mutate(
+    p_label = ifelse(p.value < .001, "p < .001", paste0("p = ", round(p.value, 3))),
+    is_sig = ifelse(p.value < 0.05, "bold", "plain")
+  ) %>%
+  mutate(Model = outcome_var %>%
+           fct_recode(
+    "Phase-Specific_A2" = "gpb_pred_a2_full",
+    "Phase-Specific_A2 (NH)" = "gpb_pred_a2_nh",
+    "Phase-Specific_A2 (Subset)" = "gpb_pred_a2",
+    "Phase-Specific_A2 (M)" = "gpb_pred_a2_mot",    
+    "ENIGMA" = "ENIGMA_predage",
+    "Centile" = "centile_MR_predicted_age",
+    "DevBrainAge" = "DevBrainAge_predage",
+    "PyBrainAge" = "PyBrainAge_predage") %>%
+      fct_relevel("PyBrainAge", "DevBrainAge", "Centile", "ENIGMA", "Phase-Specific_A2 (M)", "Phase-Specific_A2 (Subset)", "Phase-Specific_A2 (NH)", "Phase-Specific_A2")) %>%
+  mutate(Dataset = ifelse(
+    Model == "Phase-Specific_A2" | Model == "Phase-Specific_A2 (NH)", "Full", "Subset"))  
+
+
+```
+
+
+#### Plot
+```{r}
+
+fig_gsb <- gsb_p %>%
+  ggplot(aes(x = estimate, y = Model)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") + 
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.1) +
+  geom_point(size = 2.2, color = "midnightblue", shape = 18) +
+  geom_text(aes(label = p_label, fontface = is_sig), 
+            vjust = -1, size = 2) +
+  facet_grid(Dataset ~ ., scales = "free_y", space = "free_y") +   
+  scale_y_discrete(expand = expansion(add = c(0.5, 0.8))) +   
+  theme_minimal(base_size = 8) +  
+  labs(
+    title = "Early-Childhood: BRACO relative to GUSTO/S-PRESTO",
+    subtitle = "n = 359 (Full) | n = 313 (Subset)",
+    x = "Regression Coefficient (95% CI)",
+    y = "Model"
+  ) + 
+  theme(            
+    panel.spacing = unit(0.5, "lines"), 
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, face = "italic")  
+    ) 
+
+fig_gsb
+
+```
+
+#### Save
+```{r}
+setwd('/figs/supp/motion')
+
+pdf(file="fplot_gsb_mot.pdf", width=4, height=3)
+fig_gsb
+dev.off()
+```
+
+
+### YSR
+```{r}
+
+ysr_y13 <- read_excel('/original/GUSTO_Y13_YSR 11-18 - Child_20250731.xlsx')
+
+ysr_y13 <- ysr_y13 %>%
+  select(subjid, ysr_cage, contains("ss"), contains("dsm"), contains("ysr_2007"),ysr_tot, ysr_tott) %>%
+  select(!contains("pct")) %>%
+  mutate(ysr_cat = ifelse(ysr_tott > 63, 1, 0))
+
+df.ysr_1 <- merge(ba.grp.df, ysr_y13, by = c("subjid"))
+
+df.ysr_m <- df.ysr_1 %>%
+  filter(time == 5) %>%
+  filter(sex == "Male")
+
+df.ysr_f <- df.ysr_1 %>%
+  filter(time == 5) %>%
+  filter(sex == "Female")
+
+test <- df.ysr_m %>%
+  filter(!is.na(gpb_pred_a2)) 
+           
+test <- df.ysr_f %>%
+  filter(!is.na(gpb_pred_a2)) 
+
+```
+
+#### BrainAge - Female
+```{r}
+
+# Use map to run the models and combine them
+all_results <- map_df(age.pred, function(out) {
+  
+  formula <- as.formula(paste(out, "~ ysr_cat + ScanAge"))
+  model <- lm(formula, data = df.ysr_f)
+  
+  # Turn the model results into a data frame
+  tidy(model, conf.int = TRUE) %>%
+    mutate(outcome_var = out) 
+})
+
+# Filter to show ONLY the 'Group' effect across all outcomes
+ysr_f_p <- all_results %>% 
+  filter(term == "ysr_cat") %>%
+  mutate(
+    p_label = ifelse(p.value < .001, "p < .001", paste0("p = ", round(p.value, 3))),
+    is_sig = ifelse(p.value < 0.05, "bold", "plain")
+  ) %>%
+  mutate(Model = outcome_var %>%
+           fct_recode(
+    "Phase-Specific_A2" = "gpb_pred_a2_full",
+    "Phase-Specific_A2 (NH)" = "gpb_pred_a2_nh",
+    "Phase-Specific_A2 (Subset)" = "gpb_pred_a2",
+    "Phase-Specific_A2 (M)" = "gpb_pred_a2_mot",    
+    "ENIGMA" = "ENIGMA_predage",
+    "Centile" = "centile_MR_predicted_age",
+    "DevBrainAge" = "DevBrainAge_predage",
+    "PyBrainAge" = "PyBrainAge_predage") %>%
+      fct_relevel("PyBrainAge", "DevBrainAge", "Centile", "ENIGMA", "Phase-Specific_A2 (M)", "Phase-Specific_A2 (Subset)", "Phase-Specific_A2 (NH)", "Phase-Specific_A2")) %>%
+  mutate(Dataset = ifelse(
+    Model == "Phase-Specific_A2" | Model == "Phase-Specific_A2 (NH)", "Full", "Subset"))  
+
+```
+
+#### Female Plot
+```{r}
+
+fig_ysr_f <- ysr_f_p %>%
+  ggplot(aes(x = estimate, y = Model)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") + 
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.1) +
+  geom_point(size = 2.2, color = "midnightblue", shape = 18) +
+  geom_text(aes(label = p_label, fontface = is_sig), 
+            vjust = -1, size = 2) +
+  facet_grid(Dataset ~ ., scales = "free_y", space = "free_y") +   
+  scale_y_discrete(expand = expansion(add = c(0.5, 0.8))) +   
+  theme_minimal(base_size = 8) +  
+  labs(
+    title = "Females at Y13.5: YSR Total Problems > 63",
+    subtitle = "n = 37 (Full) | n = 36 (Subset)",
+    x = "Regression Coefficient (95% CI)",
+    y = "BrainAge Model"
+  ) + 
+  theme(            
+    panel.spacing = unit(0.5, "lines"), 
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, face = "italic")  
+    ) 
+
+fig_ysr_f
+
+```
+
+#### Save
+```{r}
+setwd('/figs/supp/motion')
+
+pdf(file="fplot_ysr_f_mot.pdf", width=4, height=3)
+fig_ysr_f
+dev.off()
+```
+
+#### BrainAge - Male
+```{r}
+
+# Use map to run the models and combine them
+all_results <- map_df(age.pred, function(out) {
+  
+  formula <- as.formula(paste(out, "~ ysr_cat + ScanAge"))
+  model <- lm(formula, data = df.ysr_m)
+  
+  # Turn the model results into a data frame
+  tidy(model, conf.int = TRUE) %>%
+    mutate(outcome_var = out) 
+})
+
+# Filter to show ONLY the 'Group' effect across all outcomes
+ysr_m_p <- all_results %>% 
+  filter(term == "ysr_cat") %>%
+  mutate(
+    p_label = ifelse(p.value < .001, "p < .001", paste0("p = ", round(p.value, 3))),
+    is_sig = ifelse(p.value < 0.05, "bold", "plain")
+  ) %>%
+  mutate(Model = outcome_var %>%
+           fct_recode(
+    "Phase-Specific_A2" = "gpb_pred_a2_full",
+    "Phase-Specific_A2 (NH)" = "gpb_pred_a2_nh",
+    "Phase-Specific_A2 (Subset)" = "gpb_pred_a2",
+    "Phase-Specific_A2 (M)" = "gpb_pred_a2_mot",    
+    "ENIGMA" = "ENIGMA_predage",
+    "Centile" = "centile_MR_predicted_age",
+    "DevBrainAge" = "DevBrainAge_predage",
+    "PyBrainAge" = "PyBrainAge_predage") %>%
+      fct_relevel("PyBrainAge", "DevBrainAge", "Centile", "ENIGMA", "Phase-Specific_A2 (M)", "Phase-Specific_A2 (Subset)", "Phase-Specific_A2 (NH)", "Phase-Specific_A2")) %>%
+  mutate(Dataset = ifelse(
+    Model == "Phase-Specific_A2" | Model == "Phase-Specific_A2 (NH)", "Full", "Subset"))  
+
+
+```
+
+#### Male Plot
+```{r}
+
+fig_ysr_m <- ysr_m_p %>%
+  ggplot(aes(x = estimate, y = Model)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") + 
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.1) +
+  geom_point(size = 2.2, color = "midnightblue", shape = 18) +
+  geom_text(aes(label = p_label, fontface = is_sig), 
+            vjust = -1, size = 2) +
+  facet_grid(Dataset ~ ., scales = "free_y", space = "free_y") +   
+  scale_y_discrete(expand = expansion(add = c(0.5, 0.8))) +   
+  theme_minimal(base_size = 8) +  
+  labs(
+    title = "Males at Y13.5: YSR Total Problems > 63",
+    subtitle = "n = 44 (Full) | n = 43 (Subset)",
+    x = "Regression Coefficient (95% CI)",
+    y = "BrainAge Model"
+  ) + 
+  theme(            
+    panel.spacing = unit(0.5, "lines"), 
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, face = "italic")  
+    ) 
+
+fig_ysr_m
+
+```
+
+#### Save
+```{r}
+setwd('/figs/supp/motion')
+
+pdf(file="fplot_ysr_m_mot.pdf", width=4, height=3)
+fig_ysr_m
+dev.off()
+
+```
+
+### ELA
+```{r}
+
+ela <- read.csv('/original/ELA/ela_final.csv')
+
+ela.order <- read_csv('/figs/id_order/ela.order.csv')
+
+ela.order <- ela.order %>%
+  ungroup(.) %>%
+  mutate(order = row_number())
+
+ela_1 <- merge(ba.grp.df, ela, by = c("subjid"))
+ela_1 <- merge(ela.order, ela_1, by = c("subjid", "time"), all.x = TRUE)
+ela_1 <- ela_1 %>%
+  dplyr::filter(phase == "Early-Childhood")
+
+test <- ela_1 %>%
+  filter(!is.na(gpb_pred_a2)) %>%
+  filter(!is.na(A_index_prenatal))
+           ## N = 70
+
+table(test$A_index_prenatal)
+# 115 vs 198
+
+```
+
+#### BrainAge
+```{r}
+
+# Use map to run the models and combine them
+all_results <- map_df(age.pred, function(out) {
+  
+  formula <- as.formula(paste(out, "~ A_index_prenatal + ScanAge"))
+  model <- lm(formula, data = ela_1)
+  
+  # Turn the model results into a data frame
+  tidy(model, conf.int = TRUE) %>%
+    mutate(outcome_var = out) 
+})
+
+# Filter to show ONLY the 'Group' effect across all outcomes
+ela_p <- all_results %>% 
+  filter(term == "A_index_prenatal") %>%
+  mutate(
+    p_label = ifelse(p.value < .001, "p < .001", paste0("p = ", round(p.value, 3))),
+    is_sig = ifelse(p.value < 0.05, "bold", "plain")
+  ) %>%
+   mutate(Model = outcome_var %>%
+           fct_recode(
+    "Phase-Specific_A2" = "gpb_pred_a2_full",
+    "Phase-Specific_A2 (NH)" = "gpb_pred_a2_nh",
+    "Phase-Specific_A2 (Subset)" = "gpb_pred_a2",
+    "Phase-Specific_A2 (M)" = "gpb_pred_a2_mot",    
+    "ENIGMA" = "ENIGMA_predage",
+    "Centile" = "centile_MR_predicted_age",
+    "DevBrainAge" = "DevBrainAge_predage",
+    "PyBrainAge" = "PyBrainAge_predage") %>%
+      fct_relevel("PyBrainAge", "DevBrainAge", "Centile", "ENIGMA", "Phase-Specific_A2 (M)", "Phase-Specific_A2 (Subset)", "Phase-Specific_A2 (NH)", "Phase-Specific_A2")) %>%
+  mutate(Dataset = ifelse(
+    Model == "Phase-Specific_A2" | Model == "Phase-Specific_A2 (NH)", "Full", "Subset"))  
+
+```
+
+
+#### Plot
+```{r}
+
+fig_ela <- ela_p %>%
+  ggplot(aes(x = estimate, y = Model)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") + 
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.1) +
+  geom_point(size = 2.2, color = "midnightblue", shape = 18) +
+  geom_text(aes(label = p_label, fontface = is_sig), 
+            vjust = -1, size = 2) +
+  facet_grid(Dataset ~ ., scales = "free_y", space = "free_y") +   
+  scale_y_discrete(expand = expansion(add = c(0.5, 0.8))) +   
+  theme_minimal(base_size = 8) + 
+  labs(
+    title = "Early-Childhood: Cumulative Early Life Adversity (ELA)",
+    subtitle = "n = 93 (Full) | n = 70 (Subset)",
+    x = "Regression Coefficient (95% CI)",
+    y = "Model"
+  ) + 
+  theme(            
+    panel.spacing = unit(0.5, "lines"), 
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, face = "italic")  
+    ) 
+
+fig_ela
+
+```
+
+#### Save
+```{r}
+setwd('/figs/supp/motion')
+
+pdf(file="fplot_ela_mot.pdf", width=4, height=3)
+fig_ela
+dev.off()
+```
+
+### PSS
+```{r}
+
+pss <- read_excel('/original/GUSTO_Y10_PSS_20211215.xlsx')
+
+pss <- pss %>%
+  filter(!is.na(pss_totscore)) %>%
+  select(subjid, contains("totscore")) %>%
+  mutate(pss_cat = ifelse(pss_totscore > 21, 1, 0))  
+
+df.pss_1 <- merge(ba.grp.df, pss, by = c("subjid"))
+
+df.pss_m <- df.pss_1 %>%
+  filter(time == 4) %>%
+  filter(sex == "Male")
+
+df.pss_f <- df.pss_1 %>%
+  filter(time == 4) %>%
+  filter(sex == "Female") 
+
+test <- df.pss_m %>%
+  filter(!is.na(gpb_pred_a2)) 
+
+test <- df.pss_f %>%
+  filter(!is.na(gpb_pred_a2)) 
+
+```
+
+#### BrainAge - Female
+```{r}
+
+# Use map to run the models and combine them
+all_results <- map_df(age.pred, function(out) {
+  
+  formula <- as.formula(paste(out, "~ pss_cat + ScanAge"))
+  model <- lm(formula, data = df.pss_f)
+  
+  # Turn the model results into a data frame
+  tidy(model, conf.int = TRUE) %>%
+    mutate(outcome_var = out) 
+})
+
+# Filter to show ONLY the 'Group' effect across all outcomes
+pss_f_p <- all_results %>% 
+  filter(term == "pss_cat") %>%
+  mutate(
+    p_label = ifelse(p.value < .001, "p < .001", paste0("p = ", round(p.value, 3))),
+    is_sig = ifelse(p.value < 0.05, "bold", "plain")
+  ) %>%
+  mutate(Model = outcome_var %>%
+           fct_recode(
+    "Phase-Specific_A2" = "gpb_pred_a2_full",
+    "Phase-Specific_A2 (NH)" = "gpb_pred_a2_nh",
+    "Phase-Specific_A2 (Subset)" = "gpb_pred_a2",
+    "Phase-Specific_A2 (M)" = "gpb_pred_a2_mot",    
+    "ENIGMA" = "ENIGMA_predage",
+    "Centile" = "centile_MR_predicted_age",
+    "DevBrainAge" = "DevBrainAge_predage",
+    "PyBrainAge" = "PyBrainAge_predage") %>%
+      fct_relevel("PyBrainAge", "DevBrainAge", "Centile", "ENIGMA", "Phase-Specific_A2 (M)", "Phase-Specific_A2 (Subset)", "Phase-Specific_A2 (NH)", "Phase-Specific_A2")) %>%
+  mutate(Dataset = ifelse(
+    Model == "Phase-Specific_A2" | Model == "Phase-Specific_A2 (NH)", "Full", "Subset"))  
+
+```
+
+
+#### Female Plot
+```{r}
+
+fig_pss_f <- pss_f_p %>%
+  ggplot(aes(x = estimate, y = Model)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") + 
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.1) +
+  geom_point(size = 2.2, color = "midnightblue", shape = 18) +
+  geom_text(aes(label = p_label, fontface = is_sig), 
+            vjust = -1, size = 2) +
+  facet_grid(Dataset ~ ., scales = "free_y", space = "free_y") +   
+  scale_y_discrete(expand = expansion(add = c(0.5, 0.8))) +   
+  theme_minimal(base_size = 8) +  
+  labs(
+    title = "Females at Y10.5: PSS Total Score > 21",
+    subtitle = "n = 40 (Full) | n = 36 (Subset)",
+    x = "Regression Coefficient (95% CI)",
+    y = "Model"
+  ) + 
+  theme(            
+    panel.spacing = unit(0.5, "lines"), 
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, face = "italic")  
+    ) 
+
+fig_pss_f
+
+```
+
+#### Save
+```{r}
+setwd('/figs/supp/motion')
+
+pdf(file="fplot_pss_f_mot.pdf", width=4, height=3)
+fig_pss_f
+dev.off()
+```
+
+#### BrainAge - Male
+```{r}
+
+# Use map to run the models and combine them
+all_results <- map_df(age.pred, function(out) {
+  
+  formula <- as.formula(paste(out, "~ pss_cat + ScanAge"))
+  model <- lm(formula, data = df.pss_m)
+  
+  # Turn the model results into a data frame
+  tidy(model, conf.int = TRUE) %>%
+    mutate(outcome_var = out) 
+})
+
+# Filter to show ONLY the 'Group' effect across all outcomes
+pss_m_p <- all_results %>% 
+  filter(term == "pss_cat") %>%
+  mutate(
+    p_label = ifelse(p.value < .001, "p < .001", paste0("p = ", round(p.value, 3))),
+    is_sig = ifelse(p.value < 0.05, "bold", "plain")
+  ) %>%
+  mutate(Model = outcome_var %>%
+           fct_recode(
+    "Phase-Specific_A2" = "gpb_pred_a2_full",
+    "Phase-Specific_A2 (NH)" = "gpb_pred_a2_nh",
+    "Phase-Specific_A2 (Subset)" = "gpb_pred_a2",
+    "Phase-Specific_A2 (M)" = "gpb_pred_a2_mot",    
+    "ENIGMA" = "ENIGMA_predage",
+    "Centile" = "centile_MR_predicted_age",
+    "DevBrainAge" = "DevBrainAge_predage",
+    "PyBrainAge" = "PyBrainAge_predage") %>%
+      fct_relevel("PyBrainAge", "DevBrainAge", "Centile", "ENIGMA", "Phase-Specific_A2 (M)", "Phase-Specific_A2 (Subset)", "Phase-Specific_A2 (NH)", "Phase-Specific_A2")) %>%
+  mutate(Dataset = ifelse(
+    Model == "Phase-Specific_A2" | Model == "Phase-Specific_A2 (NH)", "Full", "Subset"))  
+
+```
+
+
+#### Male Plot
+```{r}
+
+fig_pss_m <- pss_m_p %>%
+  ggplot(aes(x = estimate, y = Model)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") + 
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.1) +
+  geom_point(size = 2.2, color = "midnightblue", shape = 18) +
+  geom_text(aes(label = p_label, fontface = is_sig), 
+            vjust = -1, size = 2) +
+  facet_grid(Dataset ~ ., scales = "free_y", space = "free_y") +   
+  scale_y_discrete(expand = expansion(add = c(0.5, 0.8))) +   
+  theme_minimal(base_size = 8) +  
+  labs(
+    title = "Males at Y10.5: PSS Total Score > 21",
+    subtitle = "n = 55 (Full) | n = 46 (Subset)",
+    x = "Regression Coefficient (95% CI)",
+    y = "Model"
+  ) + 
+  theme(            
+    panel.spacing = unit(0.5, "lines"), 
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, face = "italic")  
+    ) 
+
+fig_pss_m
+
+```
+
+#### Save
+```{r}
+setwd('/figs/supp/motion')
+
+pdf(file="fplot_pss_m_mot.pdf", width=4, height=3)
+fig_pss_m
+dev.off()
+```
+
+
+
+
+
+

@@ -1,0 +1,1412 @@
+---
+title: "Results Three - Benchmarking Clean"
+author: "SYC"
+date: "2026-05-02"
+output: html_document
+---
+
+## Packages
+```{r}
+library(gt)
+library(flextable)
+library(officer)
+library(patchwork)
+library(broom)
+library(stringr)
+library(purrr)
+library(readr)
+library(Hmisc)
+library(corrplot)
+library(ggplot2)
+library(ggdist)
+library(tidyr)
+library(dplyr)
+
+```
+
+## Load data
+**Phase-Specific Models + BrainAge models from the literature**
+```{r}
+
+ba.all <- read_csv('/Users/chansy1/Dropbox/Mac (3)/Documents/projects/brainage/july2025/output/brainage_compiled.csv')
+
+```
+
+### Exclusions
+```{r}
+
+## missing data from 2 scans 
+ba.all_rm <- ba.all %>%
+  filter(!(subjid == "010-21794" & time == 1)) %>%
+  filter(!(subjid == "020-66082" & time == 2)) %>%
+  arrange(sex)
+
+```
+
+
+## Raincloud Plots 
+```{r}
+
+plot.ba <- ba.all_rm %>%
+  select(1:6, sex, phase, gpb_pred_a2, ENIGMA_predage, centile_MR_predicted_age, DevBrainAge_predage, PyBrainAge_predage) %>%
+  gather(key = "model", value = "brain.age", -subjid, -id, -ScanAge, -time, -batch, -ds, -sex, -phase)  %>%
+  mutate(Timepoint = as.character(time) %>%
+           fct_recode(
+    "GUSTO_4.5YO" = "1",
+    "GUSTO_6.0YO" = "2",
+    "GUSTO_7.5YO" = "3",
+    "GUSTO_10.5YO" = "4",
+    "GUSTO_13.0YO" = "5",
+    "BRACO/SPRESTO" = "6") %>%
+      fct_relevel("GUSTO_4.5YO", "GUSTO_6.0YO", "GUSTO_7.5YO", "GUSTO_10.5YO", "GUSTO_13.0YO", "BRACO/SPRESTO")) %>%
+  mutate(Model = model %>%
+           fct_recode(
+    "Phase-Specific_A2" = "gpb_pred_a2",    
+    "ENIGMA" = "ENIGMA_predage",
+    "Centile" = "centile_MR_predicted_age",
+    "DevBrainAge" = "DevBrainAge_predage",
+    "PyBrainAge" = "PyBrainAge_predage") %>%
+      fct_relevel("Phase-Specific_A2", "ENIGMA", "Centile", "DevBrainAge", "PyBrainAge"))  
+
+```
+
+### Males Early Childhood
+```{r}
+
+# 1. Define specific settings for each model
+model_configs <- list(
+  "Phase-Specific_A2" = c(bin = 0.15, dsize = 0.6),
+  "ENIGMA" = c(bin = 0.35, dsize = 1.4),
+  "Centile" = c(bin = 0.2, dsize = 1.1),
+  "DevBrainAge" = c(bin = 0.2, dsize = 1),
+  "PyBrainAge" = c(bin = 0.5, dsize = 1.5)
+)
+
+# 2. Function for each individual facet
+make_raincloud <- function(model_name, config_values) {
+  first_model <- names(model_configs)[1]
+  bin <- config_values["bin"]
+  dsize <- config_values["dsize"]
+  
+  p.df <- plot.ba %>%
+    filter(sex == "Male") %>%
+    filter(phase == "Early-Childhood") %>%
+    filter(Model == model_name)
+  
+  p <- p.df %>%
+    ggplot(aes(x = Timepoint, y = brain.age)) +
+    # The Cloud
+    stat_halfeye(
+      adjust = 0.5,
+      justification = -.2,
+      .width = 0, 
+      point_colour = NA,
+      alpha = 0.5,
+      scale = 0.6 # Keeps cloud height consistent
+    ) + 
+    # The Boxplot
+    geom_boxplot(
+      width = .12,
+      alpha = 0.5,
+      outlier.size = 0.5
+    ) + 
+    # The Rain 
+    stat_dots(
+      aes(x = Timepoint, y = ScanAge), 
+      side = "left", 
+      justification = 1.1,
+      binwidth = bin,
+      dotsize = dsize,
+      stackratio = 0.5,
+      scale = 0.6,
+      layout = "hex",
+      alpha = 0.7, 
+      color =  "#C8A88AFF"
+    ) + 
+    coord_flip() +
+    labs(title = model_name) +
+    theme_minimal(base_family = "Helvetica") +
+    theme(
+      panel.grid.minor = element_blank(),
+      axis.title.y = element_blank(),
+      axis.title.x = element_blank(), 
+      plot.title = element_text(
+        size = 9, 
+        hjust = 0.5
+      ), 
+      plot.margin = margin(t = 3, r = 2, b = 3, l = 2)
+    ) 
+  
+  if (model_name != first_model) {
+    p <- p + theme(
+      axis.text.y = element_blank(),   
+      axis.ticks.y = element_blank(),  
+      axis.title.y = element_blank()   
+    )
+  }
+  return(p)
+}
+
+# 3. Generate the list of plots
+all_plots <- mapply(make_raincloud, 
+                    model_name = names(model_configs), 
+                    config_values = model_configs, 
+                    SIMPLIFY = FALSE)
+
+# 4. Stitch them together
+# ncol = 5 puts them all in one row
+p1m <- wrap_plots(all_plots, ncol = 5) + 
+  plot_annotation(title = "Males: Early-childhood phase",
+                  caption = "Predicted Brain Age (Years)",
+                  theme = theme(
+                    plot.title = element_text(
+                      family = "Helvetica", 
+                      face = "bold",
+                      hjust = 0.5, 
+                      size = 11
+                      ), 
+                    plot.caption = element_text(
+                      family = "Helvetica", 
+                      hjust = 0.5
+                      )
+                    )
+  ) + 
+  theme(
+    panel.spacing = unit(0.3, "lines"), 
+    plot.margin = margin(t = 4, r = 1.5, b = 4, l = 1.5) 
+  )
+
+# 5. Display or Save
+print(p1m)
+
+```
+
+#### Save
+```{r}
+setwd('/figs')
+
+pdf(file="fig4_p1m.pdf", width = 8.5, height = 3.6)
+p1m
+dev.off()
+```
+
+### Females Early-Childhood
+```{r}
+
+# 1. Define specific settings for each model
+model_configs <- list(
+  "Phase-Specific_A2" = c(bin = 0.15, dsize = 0.6),
+  "ENIGMA" = c(bin = 0.35, dsize = 1.4),
+  "Centile" = c(bin = 0.2, dsize = 1.1),
+  "DevBrainAge" = c(bin = 0.2, dsize = 1),
+  "PyBrainAge" = c(bin = 0.5, dsize = 1.5)
+)
+
+# 2. Function for each individual facet
+make_raincloud <- function(model_name, config_values) {
+  first_model <- names(model_configs)[1]
+  bin <- config_values["bin"]
+  dsize <- config_values["dsize"]
+  
+  p.df <- plot.ba %>%
+    filter(sex == "Female") %>%
+    filter(phase == "Early-Childhood") %>%
+    filter(Model == model_name)
+  
+  p <- p.df %>%
+    ggplot(aes(x = Timepoint, y = brain.age)) +
+    # The Cloud
+    stat_halfeye(
+      adjust = 0.5,
+      justification = -.2,
+      .width = 0, 
+      point_colour = NA,
+      alpha = 0.5,
+      scale = 0.6 # Keeps cloud height consistent
+    ) + 
+    # The Boxplot
+    geom_boxplot(
+      width = .12,
+      alpha = 0.5,
+      outlier.size = 0.5
+    ) + 
+    # The Rain 
+    stat_dots(
+      aes(x = Timepoint, y = ScanAge), 
+      side = "left", 
+      justification = 1.1,
+      binwidth = bin,
+      dotsize = dsize,
+      stackratio = 0.5,
+      scale = 0.6,
+      layout = "hex",
+      alpha = 0.7, 
+      color =  "#C8A88AFF"
+    ) + 
+    coord_flip() +
+    labs(title = model_name) +
+    theme_minimal(base_family = "Helvetica") +
+    theme(
+      panel.grid.minor = element_blank(),
+      axis.title.y = element_blank(),
+      axis.title.x = element_blank(), 
+      plot.title = element_text(
+        size = 9, 
+        hjust = 0.5
+      ), 
+      plot.margin = margin(t = 3, r = 2, b = 3, l = 2)
+    ) 
+  
+  if (model_name != first_model) {
+    p <- p + theme(
+      axis.text.y = element_blank(),   
+      axis.ticks.y = element_blank(),  
+      axis.title.y = element_blank()   
+    )
+  }
+  return(p)
+}
+
+# 3. Generate the list of plots
+all_plots <- mapply(make_raincloud, 
+                    model_name = names(model_configs), 
+                    config_values = model_configs, 
+                    SIMPLIFY = FALSE)
+
+# 4. Stitch them together
+# ncol = 5 puts them all in one row
+p1f <- wrap_plots(all_plots, ncol = 5) + 
+  plot_annotation(title = "Females: Early-childhood phase",
+                  caption = "Predicted Brain Age (Years)",
+                  theme = theme(
+                    plot.title = element_text(
+                      family = "Helvetica", 
+                      face = "bold",
+                      hjust = 0.5, 
+                      size = 11
+                      ), 
+                    plot.caption = element_text(
+                      family = "Helvetica", 
+                      hjust = 0.5
+                      )
+                    )
+  ) + 
+  theme(
+    panel.spacing = unit(0.3, "lines"), 
+    plot.margin = margin(t = 4, r = 1.5, b = 4, l = 1.5) 
+  )
+
+# 5. Display or Save
+print(p1f)
+
+```
+
+#### Save
+```{r}
+setwd('/figs')
+
+pdf(file="fig4_p1f.pdf", width = 8.5, height = 3.6)
+p1f
+dev.off()
+```
+
+
+### Males Late-childhood
+```{r}
+
+# 1. Define specific settings for each model
+model_configs <- list(
+  "Phase-Specific_A2" = c(bin = 0.15, dsize = 0.6),
+  "ENIGMA" = c(bin = 0.35, dsize = 1.4),
+  "Centile" = c(bin = 0.2, dsize = 1.1),
+  "DevBrainAge" = c(bin = 0.2, dsize = 1),
+  "PyBrainAge" = c(bin = 0.5, dsize = 1.5)
+)
+
+# 2. Function for each individual facet
+make_raincloud <- function(model_name, config_values) {
+  first_model <- names(model_configs)[1]
+  bin <- config_values["bin"]
+  dsize <- config_values["dsize"]
+  
+  p.df <- plot.ba %>%
+    filter(sex == "Male") %>%
+    filter(phase == "Late-Childhood") %>%
+    filter(Model == model_name)
+  
+  p <- p.df %>%
+    ggplot(aes(x = Timepoint, y = brain.age)) +
+    # The Cloud
+    stat_halfeye(
+      adjust = 0.5,
+      justification = -.2,
+      .width = 0, 
+      point_colour = NA,
+      alpha = 0.5,
+      scale = 0.6 
+    ) + 
+    # The Boxplot
+    geom_boxplot(
+      width = .12,
+      alpha = 0.5,
+      outlier.size = 0.5
+    ) + 
+    # The Rain 
+    stat_dots(
+      aes(x = Timepoint, y = ScanAge), 
+      side = "left", 
+      justification = 1.1,
+      binwidth = bin,
+      dotsize = dsize,
+      stackratio = 0.5,
+      scale = 0.6,
+      layout = "hex",
+      alpha = 0.7, 
+      color =  "#C8A88AFF"
+    ) + 
+    coord_flip() +
+    labs(title = model_name) +
+    theme_minimal(base_family = "Helvetica") +
+    theme(
+      panel.grid.minor = element_blank(),
+      axis.title.y = element_blank(),
+      axis.title.x = element_blank(), 
+      plot.title = element_text(
+        size = 9, 
+        hjust = 0.5
+      ), 
+      plot.margin = margin(t = 3, r = 2, b = 3, l = 2)
+    ) 
+  
+  if (model_name != first_model) {
+    p <- p + theme(
+      axis.text.y = element_blank(),   
+      axis.ticks.y = element_blank(),  
+      axis.title.y = element_blank()   
+    )
+  }
+  return(p)
+}
+
+# 3. Generate the list of plots
+all_plots <- mapply(make_raincloud, 
+                    model_name = names(model_configs), 
+                    config_values = model_configs, 
+                    SIMPLIFY = FALSE)
+
+# 4. Stitch them together
+# ncol = 5 puts them all in one row
+p2m <- wrap_plots(all_plots, ncol = 5) + 
+  plot_annotation(title = "Males: Late-childhood phase",
+                  caption = "Predicted Brain Age (Years)",
+                  theme = theme(
+                    plot.title = element_text(
+                      family = "Helvetica", 
+                      face = "bold",
+                      hjust = 0.5, 
+                      size = 11
+                      ), 
+                    plot.caption = element_text(
+                      family = "Helvetica", 
+                      hjust = 0.5
+                      )
+                    )
+  ) + 
+  theme(
+    panel.spacing = unit(0.3, "lines"), 
+    plot.margin = margin(t = 4, r = 1.5, b = 4, l = 1.5) 
+  )
+
+# 5. Display or Save
+print(p2m)
+
+```
+
+#### Save
+```{r}
+setwd('/figs')
+
+pdf(file="fig4_p2m.pdf", width = 8.5, height = 3)
+p2m
+dev.off()
+```
+
+
+### Females Late-childhood
+```{r}
+
+# 1. Define specific settings for each model
+model_configs <- list(
+  "Phase-Specific_A2" = c(bin = 0.15, dsize = 0.6),
+  "ENIGMA" = c(bin = 0.35, dsize = 1.4),
+  "Centile" = c(bin = 0.2, dsize = 1.1),
+  "DevBrainAge" = c(bin = 0.2, dsize = 1),
+  "PyBrainAge" = c(bin = 0.5, dsize = 1.5)
+)
+
+# 2. Function for each individual facet
+make_raincloud <- function(model_name, config_values) {
+  first_model <- names(model_configs)[1]
+  bin <- config_values["bin"]
+  dsize <- config_values["dsize"]
+  
+  p.df <- plot.ba %>%
+    filter(sex == "Female") %>%
+    filter(phase == "Late-Childhood") %>%
+    filter(Model == model_name)
+  
+  p <- p.df %>%
+    ggplot(aes(x = Timepoint, y = brain.age)) +
+    # The Cloud
+    stat_halfeye(
+      adjust = 0.5,
+      justification = -.2,
+      .width = 0, 
+      point_colour = NA,
+      alpha = 0.5,
+      scale = 0.6 
+    ) + 
+    # The Boxplot
+    geom_boxplot(
+      width = .12,
+      alpha = 0.5,
+      outlier.size = 0.5
+    ) + 
+    # The Rain 
+    stat_dots(
+      aes(x = Timepoint, y = ScanAge), 
+      side = "left", 
+      justification = 1.1,
+      binwidth = bin,
+      dotsize = dsize,
+      stackratio = 0.5,
+      scale = 0.6,
+      layout = "hex",
+      alpha = 0.7, 
+      color =  "#C8A88AFF"
+    ) + 
+    coord_flip() +
+    labs(title = model_name) +
+    theme_minimal(base_family = "Helvetica") +
+    theme(
+      panel.grid.minor = element_blank(),
+      axis.title.y = element_blank(),
+      axis.title.x = element_blank(), 
+      plot.title = element_text(
+        size = 9, 
+        hjust = 0.5
+      ), 
+      plot.margin = margin(t = 3, r = 2, b = 3, l = 2)
+    ) 
+  
+  if (model_name != first_model) {
+    p <- p + theme(
+      axis.text.y = element_blank(),   
+      axis.ticks.y = element_blank(),  
+      axis.title.y = element_blank()   
+    )
+  }
+  return(p)
+}
+
+# 3. Generate the list of plots
+all_plots <- mapply(make_raincloud, 
+                    model_name = names(model_configs), 
+                    config_values = model_configs, 
+                    SIMPLIFY = FALSE)
+
+# 4. Stitch them together
+# ncol = 5 puts them all in one row
+p2f <- wrap_plots(all_plots, ncol = 5) + 
+  plot_annotation(title = "Females: Late-childhood phase",
+                  caption = "Predicted Brain Age (Years)",
+                  theme = theme(
+                    plot.title = element_text(
+                      family = "Helvetica", 
+                      face = "bold",
+                      hjust = 0.5, 
+                      size = 11
+                      ), 
+                    plot.caption = element_text(
+                      family = "Helvetica", 
+                      hjust = 0.5
+                      )
+                    )
+  ) + 
+  theme(
+    panel.spacing = unit(0.3, "lines"), 
+    plot.margin = margin(t = 4, r = 1.5, b = 4, l = 1.5) 
+  )
+
+# 5. Display or Save
+print(p2f)
+
+```
+
+#### Save
+```{r}
+setwd('/figs')
+
+pdf(file="fig4_p2f.pdf", width = 8.5, height = 3)
+p2f
+dev.off()
+```
+
+## Supp Table S6 
+```{r}
+
+tab.ba <- ba.all_rm %>%
+  select(1:6, sex, phase, gpb_pred_a2, ENIGMA_predage, centile_MR_predicted_age, DevBrainAge_predage, PyBrainAge_predage) %>%
+  gather(key = "model", value = "BrainAge", -subjid, -id, -ScanAge, -time, -batch, -ds, -sex, -phase)  %>%
+  mutate(BrainPAD = BrainAge - ScanAge) %>%
+  mutate(AE = abs(ScanAge - BrainAge)) %>%
+  mutate(Model = model %>%
+           fct_recode(
+    "Phase-Specific_A2" = "gpb_pred_a2",    
+    "ENIGMA" = "ENIGMA_predage",
+    "Centile" = "centile_MR_predicted_age",
+    "DevBrainAge" = "DevBrainAge_predage",
+    "PyBrainAge" = "PyBrainAge_predage") %>%
+      fct_relevel("Phase-Specific_A2", "ENIGMA", "Centile", "DevBrainAge", "PyBrainAge"))  
+
+
+sumtable1 <- tab.ba %>%
+  group_by(Model, sex, phase) %>%
+  summarise(across(c(BrainAge, BrainPAD, AE), list(
+    mean = ~mean(., na.rm = TRUE), 
+    sd = ~sd(., na.rm = TRUE), 
+    med = ~median(., na.rm = TRUE), 
+    iqr = ~IQR(., na.rm = TRUE))), 
+    cor_results = list(tidy(cor.test(BrainAge, ScanAge, use = "complete.obs"))),
+    .groups = "drop") %>%
+  unnest(cor_results) %>%
+  mutate(across(where(is.numeric), ~round(.x, 2))) %>%
+  arrange(Model, desc(phase)) %>%
+  rename(corr_r = estimate) %>%
+  rename(corr_lowci = conf.low) %>%
+  rename(corr_highci = conf.high) %>%
+  select(-statistic, -p.value, -parameter, -method, -alternative)
+
+```
+
+```{r}
+
+ba_tab_med <- sumtable1 %>%
+  ungroup(.) %>%
+  mutate("Median PAD (IQR)" = paste(BrainPAD_med, " (", BrainPAD_iqr, ")", sep = "")) %>%
+  mutate("MAE (IQR)" = paste(AE_med, " (", AE_iqr, ")", sep = "")) %>% 
+  mutate("Age r [95% CI]" = paste(corr_r, " [", corr_lowci, ", ", corr_highci, "]", sep = "")) %>%
+  select(Model, Phase, sex, `Median PAD (IQR)`, `MAE (IQR)`, `Age r [95% CI]`) %>%
+  pivot_longer(cols = c(-Model, -sex, -Phase), names_to = "Stat", values_to = "Med_IQR") %>%
+  pivot_wider(names_from = Model, values_from = Med_IQR) %>%
+  rename(Sex = sex) %>%
+  gt(rowname_col = "Stat", groupname_col = "Phase") %>%
+  tab_spanner(
+    label = "BrainAge Estimates", 
+    columns = c(`Phase-Specific_A2`, ENIGMA, Centile, DevBrainAge, PyBrainAge)
+  ) %>%  
+  tab_stubhead(
+    label = "Metric"
+  ) 
+
+ba_tab_med
+
+ba_tab_med %>%
+  gtsave('/figs/tab_balit_med.docx')
+
+
+```
+
+## Subgroup Comparisons
+### Prep
+```{r}
+
+source('/scripts/functions/make_reg_tab_three.R')
+
+```
+
+### Demo
+```{r}
+
+demo <- read.csv('/original/GUSTO_Gender & Ethnicity_Jasmine.csv')
+
+demo <- demo %>%
+  rename(sex = csex) %>%
+  rename(mother_ethnicity = mrace) %>%
+  select(subjid, sex) %>%
+  na.omit()
+
+demo2 <- read.csv('/braco-ld/data/oct2025/BRACO_Y4-6_age_20260128.csv')
+
+demo2 <- demo2 %>%
+  select(subjid, sex) %>%
+  mutate(sex = ifelse(sex == 1, "Male", ifelse(sex == 2, "Female", NA)))
+
+demo <- rbind(demo, demo2)
+
+rm(demo2)
+```
+
+### Add Biological Age
+```{r}
+
+bage.pred <- c("PEDBE", "transform.telolength")
+
+dnam <- read.csv('/data/dnam_norep_minfi.csv')
+
+dnam <- dnam %>%
+  mutate(time = case_when(
+    ds == "gusto_m54" ~ 1,
+    ds == "gusto_y6" ~ 2,
+    ds == "gusto_y7.5" ~ 3,
+    ds == "gusto_y10.5" ~ 4,   
+    ds == "braco_ld" ~ 6,
+    ds == "braco_p" ~ 6,
+    .default = NA
+  )) %>%
+  rename(BucAge = Age) %>%
+  mutate(ds = ifelse(
+    str_detect(ds, "gusto"), "gusto", ifelse(
+    str_detect(ds, "braco"), "braco", NA
+    ))) %>%
+  select(subjid, time, ds, BucAge, PEDBE) 
+
+telo <- read.csv('/data/telomerelength/output/telo_clean_jan2026.csv')
+
+telo <- telo %>%
+  select(subjid, time, ds, buc.age, Transform.Telomere..B.Globin) %>%
+  mutate(ds = ifelse(
+    str_detect(ds, "gusto"), "gusto", ifelse(
+    str_detect(ds, "braco"), "braco", NA
+    ))) %>%  
+  rename(transform.telolength = Transform.Telomere..B.Globin) %>%
+  rename(BucAge = buc.age) 
+
+bage <- merge(dnam, telo, by = c("subjid", "time", "BucAge", "ds"), all = TRUE)
+
+bage2 <- merge(bage, demo, by = c("subjid"), all.x = TRUE)
+
+bage2.1 <- bage2 %>%
+  filter(time < 4 | time == 6) %>%
+  mutate(phase = "Early-Childhood")
+
+bage2.2 <- bage2 %>%
+  filter(time == 3 | time == 4 | time == 5) %>%
+  mutate(phase = "Late-Childhood")
+
+bage2_wrep <- rbind(bage2.1, bage2.2)  
+
+```
+
+### BrainAge Prep
+```{r}
+
+age.pred <- c("gpb_pred_a2", "ENIGMA_predage", "centile_MR_predicted_age", "DevBrainAge_predage", "PyBrainAge_predage")
+
+ba.all2 <- ba.all_rm %>%
+  select(subjid, id, ScanAge, time, batch, ds, sex, all_of(age.pred), phase)
+
+```
+
+### BRACO vs SPRESTO/GUSTO
+```{r}
+
+gsb.order <- read_csv('/figs/id_order/gsb.order.csv')
+
+gsb.order <- gsb.order %>%
+  ungroup(.) %>%
+  mutate(order = row_number())
+
+gsb_1 <- merge(gsb.order, ba.all2, by = c("subjid", "time"), all.x = TRUE)
+
+gsb_1 <- gsb_1 %>%
+  filter(phase == "Early-Childhood") %>%
+  mutate(braco = ifelse(ds == "braco", 1, 0)) 
+
+gsb_2 <- bage2_wrep %>%
+  filter(phase == "Early-Childhood") %>%
+  mutate(braco = ifelse(ds == "braco", 1, 0)) %>%
+  group_by(subjid) %>%
+  mutate(id.count = row_number()) %>%
+  filter(id.count == 1)
+  
+```
+
+#### BrainAge
+```{r}
+
+# Use map to run the models and combine them
+all_results <- map_df(age.pred, function(out) {
+
+  formula <- as.formula(paste(out, "~ braco + ScanAge"))
+  model <- lm(formula, data = gsb_1)
+  
+  # Turn the model results into a data frame
+  tidy(model, conf.int = TRUE) %>%
+    mutate(outcome_var = out) 
+})
+
+# Filter to show ONLY the 'Group' effect across all outcomes
+gsb_p <- all_results %>% 
+  filter(term == "braco") %>%
+  mutate(
+    p_label = ifelse(p.value < .001, "p < .001", paste0("p = ", round(p.value, 3))),
+    is_sig = ifelse(p.value < 0.05, "bold", "plain")
+  ) %>%
+  mutate(Model = outcome_var %>%
+           fct_recode(
+    "Phase-Specific_A2" = "gpb_pred_a2",    
+    "ENIGMA" = "ENIGMA_predage",
+    "Centile" = "centile_MR_predicted_age",
+    "DevBrainAge" = "DevBrainAge_predage",
+    "PyBrainAge" = "PyBrainAge_predage") %>%
+      fct_relevel("PyBrainAge", "DevBrainAge", "Centile", "ENIGMA", "Phase-Specific_A2")) 
+
+```
+
+#### BioAge
+```{r}
+
+# Use map to run the models and combine them
+all_results <- map_df(bage.pred, function(out) {
+  
+  formula <- as.formula(paste(out, "~ braco + BucAge"))
+  model <- lm(formula, data = gsb_2)
+  
+  # Turn the model results into a data frame
+  tidy(model, conf.int = TRUE) %>%
+    mutate(outcome_var = out) 
+})
+
+# Filter to show ONLY the 'Group' effect across all outcomes
+gsb_p2 <- all_results %>% 
+  filter(term == "braco") %>%
+  mutate(
+    p_label = ifelse(p.value < .001, "p < .001", paste0("p = ", round(p.value, 3))),
+    is_sig = ifelse(p.value < 0.05, "bold", "plain")
+  ) %>%
+  mutate(Model = outcome_var %>%
+           fct_recode(
+    "PedBE" = "PEDBE",    
+    "TeloLength" = "transform.telolength") %>%
+      fct_relevel("TeloLength", "PedBE")) 
+
+gsb_p <- rbind(gsb_p2, gsb_p)
+
+```
+
+#### Plot
+```{r}
+
+fig_gsb <- gsb_p %>%
+  ggplot(aes(x = estimate, y = Model)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") + 
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.1) +
+  geom_point(size = 2.2, color = "midnightblue", shape = 18) +
+  geom_text(aes(label = p_label, fontface = is_sig), 
+            vjust = -1, size = 2) +
+  scale_y_discrete(expand = expansion(add = c(0.5, 0.8))) +   
+  theme_minimal(base_size = 8) +  
+  labs(
+    title = "Early-Childhood: BRACO relative to GUSTO/S-PRESTO",
+    subtitle = "n = 357",
+    x = "Regression Coefficient (95% CI)",
+    y = "Model"
+  ) + 
+  theme(            
+#    panel.spacing = unit(0.5, "lines"), 
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, face = "italic")  
+    ) 
+
+fig_gsb
+
+```
+#### Save
+```{r}
+setwd('/figs')
+
+pdf(file="fplot_fig4b_gsb.pdf", width=4, height=2)
+fig_gsb
+dev.off()
+```
+
+#### Table 
+```{r}
+
+gsb_tab <- make_reg_tab(gsb_p, "BRACO")
+
+gsb_tab
+
+save_as_docx(gsb_tab, path = '/figs/supp/regression_tab/gsb_three.docx')
+
+```
+
+
+### YSR
+```{r}
+
+ysr_y13 <- read_excel('/original/GUSTO_Y13_YSR 11-18 - Child_20250731.xlsx')
+
+ysr_y13 <- ysr_y13 %>%
+  select(subjid, ysr_cage, contains("ss"), contains("dsm"), contains("ysr_2007"),ysr_tot, ysr_tott) %>%
+  select(!contains("pct")) %>%
+  mutate(ysr_cat = ifelse(ysr_tott > 63, 1, 0))
+
+df.ysr_1 <- merge(ba.all2, ysr_y13, by = c("subjid"))
+
+df.ysr_m <- df.ysr_1 %>%
+  filter(time == 5) %>%
+  filter(sex == "Male")
+
+df.ysr_f <- df.ysr_1 %>%
+  filter(time == 5) %>%
+  filter(sex == "Female")
+
+```
+
+#### BrainAge - Female
+```{r}
+
+# Use map to run the models and combine them
+all_results <- map_df(age.pred, function(out) {
+  
+  formula <- as.formula(paste(out, "~ ysr_cat + ScanAge"))
+  model <- lm(formula, data = df.ysr_f)
+  
+  # Turn the model results into a data frame
+  tidy(model, conf.int = TRUE) %>%
+    mutate(outcome_var = out) 
+})
+
+# Filter to show ONLY the 'Group' effect across all outcomes
+ysr_f_p <- all_results %>% 
+  filter(term == "ysr_cat") %>%
+  mutate(
+    p_label = ifelse(p.value < .001, "p < .001", paste0("p = ", round(p.value, 3))),
+    is_sig = ifelse(p.value < 0.05, "bold", "plain")
+  ) %>%
+  mutate(Model = outcome_var %>%
+           fct_recode(
+    "Phase-Specific_A2" = "gpb_pred_a2",    
+    "ENIGMA" = "ENIGMA_predage",
+    "Centile" = "centile_MR_predicted_age",
+    "DevBrainAge" = "DevBrainAge_predage",
+    "PyBrainAge" = "PyBrainAge_predage") %>%
+      fct_relevel("PyBrainAge", "DevBrainAge", "Centile", "ENIGMA", "Phase-Specific_A2")) 
+
+```
+
+#### Female Plot
+```{r}
+
+fig_ysr_f <- ysr_f_p %>%
+  ggplot(aes(x = estimate, y = Model)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") + 
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.1) +
+  geom_point(size = 2.2, color = "midnightblue", shape = 18) +
+  geom_text(aes(label = p_label, fontface = is_sig), 
+            vjust = -1, size = 2) +
+  scale_y_discrete(expand = expansion(add = c(0.5, 0.8))) +   
+  theme_minimal(base_size = 8) +  
+  labs(
+    title = "Females at Y13.5: YSR Total Problems > 63",
+    subtitle = "N = 37",
+    x = "Regression Coefficient (95% CI)",
+    y = "BrainAge Model"
+  ) + 
+  theme(            
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, face = "italic")  
+    ) 
+
+fig_ysr_f
+
+```
+
+#### Save
+```{r}
+setwd('/figs')
+
+pdf(file="fplot_fig4b_ysr_f.pdf", width=4, height=1.7)
+fig_ysr_f
+dev.off()
+```
+
+#### Table 
+```{r}
+
+ysr_f_tab <- make_reg_tab(ysr_f_p, "High YSR Total (Females)")
+
+ysr_f_tab
+
+save_as_docx(ysr_f_tab, path = '/figs/supp/regression_tab/ysr_f_three.docx')
+
+```
+
+#### BrainAge - Male
+```{r}
+
+# Use map to run the models and combine them
+all_results <- map_df(age.pred, function(out) {
+  
+  formula <- as.formula(paste(out, "~ ysr_cat + ScanAge"))
+  model <- lm(formula, data = df.ysr_m)
+  
+  # Turn the model results into a data frame
+  tidy(model, conf.int = TRUE) %>%
+    mutate(outcome_var = out) 
+})
+
+# Filter to show ONLY the 'Group' effect across all outcomes
+ysr_m_p <- all_results %>% 
+  filter(term == "ysr_cat") %>%
+  mutate(
+    p_label = ifelse(p.value < .001, "p < .001", paste0("p = ", round(p.value, 3))),
+    is_sig = ifelse(p.value < 0.05, "bold", "plain")
+  ) %>%
+  mutate(Model = outcome_var %>%
+           fct_recode(
+    "Phase-Specific_A2" = "gpb_pred_a2",    
+    "ENIGMA" = "ENIGMA_predage",
+    "Centile" = "centile_MR_predicted_age",
+    "DevBrainAge" = "DevBrainAge_predage",
+    "PyBrainAge" = "PyBrainAge_predage") %>%
+      fct_relevel("PyBrainAge", "DevBrainAge", "Centile", "ENIGMA", "Phase-Specific_A2")) 
+
+```
+
+#### Male Plot
+```{r}
+
+fig_ysr_m <- ysr_m_p %>%
+  ggplot(aes(x = estimate, y = Model)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") + 
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.1) +
+  geom_point(size = 2.2, color = "midnightblue", shape = 18) +
+  geom_text(aes(label = p_label, fontface = is_sig), 
+            vjust = -1, size = 2) +
+  scale_y_discrete(expand = expansion(add = c(0.5, 0.8))) +   
+  theme_minimal(base_size = 8) +  
+  labs(
+    title = "Males at Y13.5: YSR Total Problems > 63",
+    subtitle = "N = 44",
+    x = "Regression Coefficient (95% CI)",
+    y = "BrainAge Model"
+  ) + 
+  theme(            
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, face = "italic")  
+    ) 
+
+fig_ysr_m
+
+```
+
+#### Save
+```{r}
+setwd('/figs')
+
+pdf(file="fplot_fig4b_ysr_m.pdf", width=4, height=1.7)
+fig_ysr_m
+dev.off()
+```
+
+#### Table 
+```{r}
+
+ysr_m_tab <- make_reg_tab(ysr_m_p, "High YSR Total (Males)")
+
+ysr_m_tab
+
+save_as_docx(ysr_m_tab, path = '/figs/supp/regression_tab/ysr_m_three.docx')
+
+```
+
+### ELA
+```{r}
+
+ela <- read.csv('/original/ELA/ela_final.csv')
+
+ela.order <- read_csv('/figs/id_order/ela.order.csv')
+
+ela.order <- ela.order %>%
+  ungroup(.) %>%
+  mutate(order = row_number())
+
+ela_1 <- merge(ba.all2, ela, by = c("subjid"))
+ela_1 <- merge(ela.order, ela_1, by = c("subjid", "time"), all.x = TRUE)
+ela_1 <- ela_1 %>%
+  dplyr::filter(phase == "Early-Childhood")
+
+ela_2 <- merge(bage2_wrep, ela, by = c("subjid"))
+ela_2 <- ela_2 %>%
+  filter(phase == "Early-Childhood") %>%
+  group_by(subjid) %>%
+  mutate(id.count = row_number()) %>%
+  filter(id.count == 1) 
+
+```
+
+#### BrainAge
+```{r}
+
+# Use map to run the models and combine them
+all_results <- map_df(age.pred, function(out) {
+  
+  formula <- as.formula(paste(out, "~ A_index_prenatal + ScanAge"))
+  model <- lm(formula, data = ela_1)
+  
+  # Turn the model results into a data frame
+  tidy(model, conf.int = TRUE) %>%
+    mutate(outcome_var = out) 
+})
+
+# Filter to show ONLY the 'Group' effect across all outcomes
+ela_p <- all_results %>% 
+  filter(term == "A_index_prenatal") %>%
+  mutate(
+    p_label = ifelse(p.value < .001, "p < .001", paste0("p = ", round(p.value, 3))),
+    is_sig = ifelse(p.value < 0.05, "bold", "plain")
+  ) %>%
+  mutate(Model = outcome_var %>%
+           fct_recode(
+    "Phase-Specific_A2" = "gpb_pred_a2",    
+    "ENIGMA" = "ENIGMA_predage",
+    "Centile" = "centile_MR_predicted_age",
+    "DevBrainAge" = "DevBrainAge_predage",
+    "PyBrainAge" = "PyBrainAge_predage") %>%
+      fct_relevel("PyBrainAge", "DevBrainAge", "Centile", "ENIGMA", "Phase-Specific_A2")) 
+
+```
+
+#### BioAge
+```{r}
+
+# Use map to run the models and combine them
+all_results <- map_df(bage.pred, function(out) {
+  
+  formula <- as.formula(paste(out, "~ A_index_prenatal + BucAge"))
+  model <- lm(formula, data = ela_2)
+  
+  # Turn the model results into a data frame
+  tidy(model, conf.int = TRUE) %>%
+    mutate(outcome_var = out) 
+})
+
+# Filter to show ONLY the 'Group' effect across all outcomes
+ela_p2 <- all_results %>% 
+  filter(term == "A_index_prenatal") %>%
+  mutate(
+    p_label = ifelse(p.value < .001, "p < .001", paste0("p = ", round(p.value, 3))),
+    is_sig = ifelse(p.value < 0.05, "bold", "plain")
+  ) %>%
+  mutate(Model = outcome_var %>%
+           fct_recode(
+    "PedBE" = "PEDBE",    
+    "TeloLength" = "transform.telolength") %>%
+      fct_relevel("TeloLength", "PedBE")) 
+
+ela_p <- rbind(ela_p2, ela_p)
+
+```
+
+#### Plot
+```{r}
+
+fig_ela <- ela_p %>%
+  ggplot(aes(x = estimate, y = Model)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") + 
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.1) +
+  geom_point(size = 2.2, color = "midnightblue", shape = 18) +
+  geom_text(aes(label = p_label, fontface = is_sig), 
+            vjust = -1, size = 2) +
+  scale_y_discrete(expand = expansion(add = c(0.5, 0.8))) +   
+  theme_minimal(base_size = 8) + 
+  labs(
+    title = "Early-Childhood: Cumulative Early Life Adversity (ELA)",
+    subtitle = "n = 91",
+    x = "Regression Coefficient (95% CI)",
+    y = "Model"
+  ) + 
+  theme(            
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, face = "italic")  
+    ) 
+
+fig_ela
+
+```
+
+#### Save
+```{r}
+setwd('/figs')
+
+pdf(file="fplot_fig4b_ela.pdf", width=4, height=2)
+fig_ela
+dev.off()
+```
+
+#### Table 
+```{r}
+
+ela_tab <- make_reg_tab(ela_p, "Cumulative ELA")
+
+ela_tab
+
+save_as_docx(ela_tab, path = '/figs/supp/regression_tab/ela_three.docx')
+
+```
+
+### PSS
+```{r}
+
+pss <- read_excel('/original/GUSTO_Y10_PSS_20211215.xlsx')
+
+pss <- pss %>%
+  filter(!is.na(pss_totscore)) %>%
+  select(subjid, contains("totscore")) %>%
+  mutate(pss_cat = ifelse(pss_totscore > 21, 1, 0))  
+
+df.pss_1 <- merge(ba.all2, pss, by = c("subjid"))
+
+df.pss_m <- df.pss_1 %>%
+  filter(time == 4) %>%
+  filter(sex == "Male")
+
+df.pss_f <- df.pss_1 %>%
+  filter(time == 4) %>%
+  filter(sex == "Female") 
+
+df.pss_2 <- merge(bage2_wrep, pss, by = c("subjid"))
+
+df.pss_m2 <- df.pss_2 %>%
+  filter(time == 4) %>%
+  filter(sex == "Male")
+
+df.pss_f2 <- df.pss_2 %>%
+  filter(time == 4) %>%
+  filter(sex == "Female") 
+
+```
+
+#### BrainAge - Female
+```{r}
+
+# Use map to run the models and combine them
+all_results <- map_df(age.pred, function(out) {
+  
+  formula <- as.formula(paste(out, "~ pss_cat + ScanAge"))
+  model <- lm(formula, data = df.pss_f)
+  
+  # Turn the model results into a data frame
+  tidy(model, conf.int = TRUE) %>%
+    mutate(outcome_var = out) 
+})
+
+# Filter to show ONLY the 'Group' effect across all outcomes
+pss_f_p <- all_results %>% 
+  filter(term == "pss_cat") %>%
+  mutate(
+    p_label = ifelse(p.value < .001, "p < .001", paste0("p = ", round(p.value, 3))),
+    is_sig = ifelse(p.value < 0.05, "bold", "plain")
+  ) %>%
+  mutate(Model = outcome_var %>%
+           fct_recode(
+    "Phase-Specific_A2" = "gpb_pred_a2",    
+    "ENIGMA" = "ENIGMA_predage",
+    "Centile" = "centile_MR_predicted_age",
+    "DevBrainAge" = "DevBrainAge_predage",
+    "PyBrainAge" = "PyBrainAge_predage") %>%
+      fct_relevel("PyBrainAge", "DevBrainAge", "Centile", "ENIGMA", "Phase-Specific_A2")) 
+
+```
+
+#### BioAge - Female
+```{r}
+
+# Use map (a better for-loop) to run the models and combine them
+all_results <- map_df(bage.pred, function(out) {
+  
+  formula <- as.formula(paste(out, "~ pss_cat + BucAge"))
+  model <- lm(formula, data = df.pss_f2)
+  
+  # Turn the model results into a data frame
+  tidy(model, conf.int = TRUE) %>%
+    mutate(outcome_var = out) 
+})
+
+# Filter to show ONLY the 'Group' effect across all outcomes
+pss_f_p2 <- all_results %>% 
+  filter(term == "pss_cat") %>%
+  mutate(
+    p_label = ifelse(p.value < .001, "p < .001", paste0("p = ", round(p.value, 3))),
+    is_sig = ifelse(p.value < 0.05, "bold", "plain")
+  ) %>%
+  mutate(Model = outcome_var %>%
+           fct_recode(
+    "PedBE" = "PEDBE",    
+    "TeloLength" = "transform.telolength") %>%
+      fct_relevel("TeloLength", "PedBE")) 
+
+pss_f_p  <- rbind(pss_f_p2, pss_f_p)
+
+```
+
+#### Female Plot
+```{r}
+
+fig_pss_f <- pss_f_p %>%
+  ggplot(aes(x = estimate, y = Model)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") + 
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.1) +
+  geom_point(size = 2.2, color = "midnightblue", shape = 18) +
+  geom_text(aes(label = p_label, fontface = is_sig), 
+            vjust = -1, size = 2) +
+  scale_y_discrete(expand = expansion(add = c(0.5, 0.8))) +   
+  theme_minimal(base_size = 8) +  
+  labs(
+    title = "Females at Y10.5: PSS Total Score > 21",
+    subtitle = "N = 40",
+    x = "Regression Coefficient (95% CI)",
+    y = "Model"
+  ) + 
+  theme(            
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, face = "italic")  
+    ) 
+
+fig_pss_f
+
+```
+
+#### Save
+```{r}
+setwd('/figs')
+
+pdf(file="fplot_fig4b_pss_f.pdf", width=4, height=2)
+fig_pss_f
+dev.off()
+```
+
+#### Table 
+```{r}
+
+pss_f_tab <- make_reg_tab(pss_f_p, "High PSS (Females)")
+
+pss_f_tab
+
+save_as_docx(pss_f_tab, path = '/figs/supp/regression_tab/pss_f_three.docx')
+
+```
+
+#### BrainAge - Male
+```{r}
+
+# Use map to run the models and combine them
+all_results <- map_df(age.pred, function(out) {
+  
+  formula <- as.formula(paste(out, "~ pss_cat + ScanAge"))
+  model <- lm(formula, data = df.pss_m)
+  
+  # Turn the model results into a data frame
+  tidy(model, conf.int = TRUE) %>%
+    mutate(outcome_var = out) 
+})
+
+# Filter to show ONLY the 'Group' effect across all outcomes
+pss_m_p <- all_results %>% 
+  filter(term == "pss_cat") %>%
+  mutate(
+    p_label = ifelse(p.value < .001, "p < .001", paste0("p = ", round(p.value, 3))),
+    is_sig = ifelse(p.value < 0.05, "bold", "plain")
+  ) %>%
+  mutate(Model = outcome_var %>%
+           fct_recode(
+    "Phase-Specific_A2" = "gpb_pred_a2",    
+    "ENIGMA" = "ENIGMA_predage",
+    "Centile" = "centile_MR_predicted_age",
+    "DevBrainAge" = "DevBrainAge_predage",
+    "PyBrainAge" = "PyBrainAge_predage") %>%
+      fct_relevel("PyBrainAge", "DevBrainAge", "Centile", "ENIGMA", "Phase-Specific_A2")) 
+
+```
+
+#### BioAge - Male
+```{r}
+
+# Use map to run the models and combine them
+all_results <- map_df(bage.pred, function(out) {
+  
+  formula <- as.formula(paste(out, "~ pss_cat + BucAge"))
+  model <- lm(formula, data = df.pss_m2)
+  
+  # Turn the model results into a data frame
+  tidy(model, conf.int = TRUE) %>%
+    mutate(outcome_var = out) 
+})
+
+# Filter to show ONLY the 'Group' effect across all outcomes
+pss_m_p2 <- all_results %>% 
+  filter(term == "pss_cat") %>%
+  mutate(
+    p_label = ifelse(p.value < .001, "p < .001", paste0("p = ", round(p.value, 3))),
+    is_sig = ifelse(p.value < 0.05, "bold", "plain")
+  ) %>%
+  mutate(Model = outcome_var %>%
+           fct_recode(
+    "PedBE" = "PEDBE",    
+    "TeloLength" = "transform.telolength") %>%
+      fct_relevel("TeloLength", "PedBE")) 
+
+pss_m_p  <- rbind(pss_m_p2, pss_m_p)
+
+```
+
+#### Male Plot
+```{r}
+
+fig_pss_m <- pss_m_p %>%
+  ggplot(aes(x = estimate, y = Model)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") + 
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.1) +
+  geom_point(size = 2.2, color = "midnightblue", shape = 18) +
+  geom_text(aes(label = p_label, fontface = is_sig), 
+            vjust = -1, size = 2) +
+  scale_y_discrete(expand = expansion(add = c(0.5, 0.8))) +   
+  theme_minimal(base_size = 8) +  
+  labs(
+    title = "Males at Y10.5: PSS Total Score > 21",
+    subtitle = "N = 55",
+    x = "Regression Coefficient (95% CI)",
+    y = "Model"
+  ) + 
+  theme(            
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, face = "italic")  
+    ) 
+
+fig_pss_m
+
+```
+
+#### Save
+```{r}
+setwd('/figs')
+
+pdf(file="fplot_fig4b_pss_m.pdf", width=4, height=2)
+fig_pss_m
+dev.off()
+```
+
+#### Table 
+```{r}
+
+pss_m_tab <- make_reg_tab(pss_m_p, "High PSS (Males)")
+
+pss_m_tab
+
+save_as_docx(pss_m_tab, path = '/figs/supp/regression_tab/pss_m_three.docx')
+
+```
+

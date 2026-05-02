@@ -1,0 +1,302 @@
+---
+title: "Results Two - SHAP plots clean"
+author: "SYC"
+date: "2026-05-02"
+output: html_document
+---
+
+```{r}
+
+library(tidyr)
+library(readr)
+library(stringr)
+library(ggseg)
+library(ggplot2)
+library(viridis)
+library(janitor)
+library(circlize)
+library(ComplexHeatmap)
+library(gt)
+library(dplyr)
+```
+
+## Load Data
+```{r}
+
+m1 <- read_csv('/output/shap.a2.m1.csv')
+
+m1 <- m1 %>%
+  mutate(sex = "Male") %>%
+  mutate(phase = "Early-Childhood") %>%
+  mutate(shap_pct = (mean_shap_score / sum(mean_shap_score)) * 100)
+  
+
+m2 <- read_csv('/output/shap.a2.m2.csv')
+
+m2 <- m2 %>%
+  mutate(sex = "Male") %>%
+  mutate(phase = "Late-Childhood")  %>%
+  mutate(shap_pct = (mean_shap_score / sum(mean_shap_score)) * 100)
+
+
+f1 <- read_csv('/output/shap.a2.f1.csv')
+
+f1 <- f1 %>%
+  mutate(sex = "Female") %>%
+  mutate(phase = "Early-Childhood") %>%
+  mutate(shap_pct = (mean_shap_score / sum(mean_shap_score)) * 100)
+
+
+f2 <- read_csv('/output/shap.a2.f2.csv')
+
+f2 <- f2 %>%
+  mutate(sex = "Female") %>%
+  mutate(phase = "Late-Childhood") %>%
+  mutate(shap_pct = (mean_shap_score / sum(mean_shap_score)) * 100)
+
+
+df <- rbind(f1, m1, f2, m2)
+
+df$sex <- factor(df$sex, levels = c("Female", "Male"))
+df$phase <- factor(df$phase, levels = c("Early-Childhood", "Late-Childhood"))
+
+```
+
+## Modality
+```{r}
+
+ct <- df %>%
+  filter(modality == "S-CT")
+
+vol <- df %>%
+  filter(modality == "S-Volume")
+
+int <- df %>%
+  filter(modality == "F-Integration")
+
+```
+
+### Vol
+#### Prep
+```{r}
+
+temp <- as.data.frame(aseg())
+
+temp1 <- data.frame(label = unique(temp$label))
+temp1 <- temp1 %>%
+  filter(grepl("Thalamus|Caudate|Putamen|Pallidum|Hippocampus|Amygdala|Accumbens", label)) %>%
+  mutate(region = make_clean_names(label))
+
+vol$region <- str_replace(vol$region, fixed(".combat"), "")
+vol$region <- str_replace(vol$region, fixed("_proper"), "")
+
+vol <- merge(vol, temp1, by = c("region"))
+
+vol <- vol %>%
+  select(label, shap_pct, sex, phase)
+
+vol.temp <- temp
+
+```
+
+#### Plot
+```{r}
+
+vol_plot <- vol %>%
+  group_by(sex,phase) %>%
+  brain_join(aseg(), by = "label") %>%
+  reposition_brain(
+    position = "horizontal",
+    views = c("axial_4", "axial_5", "coronal_2")
+  ) %>%
+  ggplot() +
+  geom_sf(aes(fill = shap_pct), colour = "white") +
+  scale_fill_viridis_c(option = "plasma", limits = c(0, 9.5), end = 0.9) +
+  theme_void() +
+  labs(title = "Subcortical Volume",
+       fill = "SHAP %") +
+  facet_grid(sex ~ phase, switch = "y") + 
+  theme(panel.spacing = unit(0.5, "cm"))
+
+vol_plot
+
+```
+#### Save
+```{r}
+setwd('/figs/fig3')
+
+pdf(file="vol.pdf", width = 8, height = 4.5)
+vol_plot
+dev.off()
+```
+
+
+### CT
+#### Prep
+```{r}
+
+temp <- as.data.frame(dk())
+
+ct <- ct %>%
+  mutate(label = str_replace(ct$region, fixed("_thickness.combat"), "")) 
+
+ct <- ct %>%
+  select(label, shap_pct, sex, phase)
+
+
+```
+
+#### Plot
+```{r}
+
+ct_plot <- ct %>%
+  group_by(sex,phase) %>%
+  brain_join(dk(), by = "label") %>%  
+  filter(view %in% c("lateral", "medial"))  %>%
+  reposition_brain(
+    hemi ~ view) %>%
+  ggplot() +
+  geom_sf(aes(fill = shap_pct), colour = "white") +
+  scale_fill_viridis_c(option = "plasma", limits = c(0, 9), end = 0.9) +
+  theme_void() +
+  labs(title = "Cortical Thickness",
+       fill = "SHAP %") +
+  facet_grid(sex ~ phase, switch = "y") + 
+  theme(panel.spacing = unit(1, "cm"))
+
+ct_plot
+  
+
+```
+#### Save
+```{r}
+setwd('/figs/fig3')
+
+pdf(file="ct.pdf", width = 8.3, height = 4.7)
+ct_plot
+dev.off()
+```
+
+### Functional
+#### Prep
+```{r}
+
+int_prep <- int %>%
+  filter(str_detect(region, "Int.")) %>%
+  mutate(label = str_replace(region, fixed(".combat"), "")) %>%
+  mutate(label = str_replace(label, fixed("Int."), "")) %>%
+  separate(label, into = c("from", "to"), sep = "x") %>%
+  mutate(group = paste(sex, phase, sep = "_")) %>%
+  select(from, to, shap_pct, group) 
+
+```
+
+#### Plot
+```{r}
+
+grid.cols = c(VisCent = "#7F3FBF", 
+              VisPeri = "#A374CC",
+              SMN_A = "#3F90DA", 
+              SMN_B = "#70AEE1", 
+              DAN_A = "#008000", 
+              DAN_B = "#40C040", 
+              VAN_A = "#B350B3", 
+              VAN_B = "#D6A8D6", 
+              LIM_A = "#FFFF66", 
+              LIM_B = "#C0C0C0", 
+              ContA = "#FF8C00", 
+              ContB = "#F5A45D", 
+              ContC = "#FFCC99", 
+              DMN_A = "#FF0000", 
+              DMN_B = "#CC0000", 
+              DMN_C = "#8B0000", 
+              TPJ = "#00FFFF"
+)  
+
+
+col_fun = colorRamp2(c(0, 1, 2, 3, 4), viridis(5, option = "magma"))
+
+
+```
+
+#### Save
+```{r}
+setwd('/figs/fig3')
+
+pdf(file="int.pdf", width = 8.5, height = 2.8, family = "Helvetica")
+
+circos.clear()
+lay_mat <- matrix(c(1, 2, 3, 4,
+                    5, 5, 5, 5), 
+                  nrow = 2, byrow = TRUE)
+
+layout(lay_mat, heights = c(5, 1))
+par(mar = c(1, 1, 1, 1))
+
+for (g in unique(int_prep$group)) {
+  group_data <- int_prep[int_prep$group == g, ]
+  
+  par(cex = 0.45)
+  circos.par(
+    canvas.xlim = c(-1, 1), 
+    canvas.ylim = c(-1, 1), 
+    track.margin = c(0.01, 0.01), 
+    gap.after = c(rep(4.5,17)))
+  
+  chordDiagram(
+    group_data, 
+    order = c("VisCent", "VisPeri", "SMN_A", "SMN_B", "DAN_A", "DAN_B", "VAN_A", "VAN_B", "LIM_A", "LIM_B", "ContA", "ContB", "ContC", "DMN_A", "DMN_B", "DMN_C", "TPJ"), 
+    grid.col = grid.cols, 
+    col = col_fun(group_data[[3]]), 
+    transparency = 0.1, 
+    link.zindex = rank(group_data[[3]])
+    ) 
+  title(paste(g), cex.main = 1.2)
+  circos.clear() 
+}
+
+plot.new() 
+lgd <- Legend(
+  title = "SHAP %", 
+  col_fun = col_fun, 
+  direction = "horizontal", 
+  legend_width = unit(5, "cm"), # Increased width to match 4-column span
+  at = c(0, 2, 4)
+  )
+
+draw(lgd, x = unit(0.5, "npc"), y = unit(0, "npc"), just ="center")
+
+dev.off()
+
+```
+
+## Supplement Table
+```{r}
+
+df.supp1 <- f1 %>%
+  select(region, shap_pct) %>%
+  mutate(region = str_replace(region, fixed(".combat"), "")) %>%
+  mutate(shap_pct = round(shap_pct,2)) %>%
+  filter(shap_pct > 0.456621)
+
+df.supp2 <- m1 %>%
+  select(region, shap_pct) %>%
+  mutate(region = str_replace(region, fixed(".combat"), "")) %>%
+  mutate(shap_pct = round(shap_pct,2)) %>%
+  filter(shap_pct > 0.456621)
+
+df.supp3 <- f2 %>%
+  select(region, shap_pct) %>%
+  mutate(region = str_replace(region, fixed(".combat"), "")) %>%
+  mutate(shap_pct = round(shap_pct,2)) %>%
+  filter(shap_pct > 0.456621)
+
+df.supp4 <- m2 %>%
+  select(region, shap_pct) %>%
+  mutate(region = str_replace(region, fixed(".combat"), "")) %>%
+  mutate(shap_pct = round(shap_pct,2)) %>%
+  filter(shap_pct > 0.456621)
+
+```
+
+

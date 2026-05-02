@@ -1,0 +1,2303 @@
+---
+title: "Phase-Specific BrainAge models - Clean Code"
+author: "SYC"
+date: "2026-05-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(caret)
+library(randomForest)
+library(partykit)
+library(vip)
+library(pdp)
+library(tibble)
+library(longCombat)
+library(janitor)
+library(gbm)
+library(gpboost)
+library(SHAPforxgboost)
+library(corrplot)
+library(readxl)
+library(tidyr)
+library(purrr)
+library(ggplot2)
+library(stringr)
+library(dplyr)
+```
+
+
+## Load data
+### Neuroimaging Input Features and Demographics
+```{r}
+
+df.har <- read.csv("/data/dfe_har.csv")
+
+demo_cov <- read.csv("/data/dfe_cov.csv")
+
+```
+
+## GPBOOST PREP
+```{r}
+
+dff <- transform(df.har, id = as.numeric(factor(subjid)))
+
+id.key <- dff %>%
+  select(subjid, id) %>%
+  unique()
+
+test <- dff %>%
+  filter(is.na(ScanAge))
+
+test_dat <- dff %>%
+  filter(test == 1) %>%
+  select(subjid, id, ScanAge, sex, time, batch, ds)
+
+train.id <- dff %>%
+  filter(is.na(test)) %>%
+  select(subjid, ds, sex) %>%
+  unique(.)
+
+test.id <- test_dat %>%
+  select(subjid, ds, sex) %>%
+  unique(.)
+  
+
+```
+
+## Stratify by Phase 
+```{r}
+
+dff1 <- dff %>%
+  filter(time < 4 | time == 6)
+
+dff2 <- dff %>%
+  filter(time >=3 & time < 6)
+
+fivenum(dff1$ScanAge)
+fivenum(dff2$ScanAge)
+
+```
+
+## Stratify by Sex
+### Phase 1 (up to 8YO)
+```{r}
+
+dff1.m <- dff1 %>%
+  filter(sex == "Male") %>%
+  arrange(subjid, ScanAge)
+
+test_dat1.m <- dff1.m %>%
+  filter(test == 1) %>%
+  select(subjid, id, ScanAge, time, batch, ds)
+
+train1.m <- dff1.m %>%
+  filter(is.na(test))
+
+dff1.f <- dff1 %>%
+  filter(sex == "Female") %>%
+  arrange(subjid, ScanAge)
+
+test_dat1.f <- dff1.f %>%
+  filter(test == 1) %>%
+  select(subjid, id, ScanAge, time, batch, ds)
+
+train1.f <- dff1.f %>%
+  filter(is.na(test))
+
+```
+
+### Phase 2 (up to 7 to 13YO)
+```{r}
+
+dff2.m <- dff2 %>%
+  filter(sex == "Male") %>%
+  arrange(subjid, ScanAge)
+
+test_dat2.m <- dff2.m %>%
+  filter(test == 1) %>%
+  select(subjid, id, ScanAge, time, batch, ds)
+
+train2.m <- dff2.m %>%
+  filter(is.na(test))
+
+dff2.f <- dff2 %>%
+  filter(sex == "Female") %>%
+  arrange(subjid, ScanAge)
+
+test_dat2.f <- dff2.f %>%
+  filter(test == 1) %>%
+  select(subjid, id, ScanAge, time, batch, ds)
+
+train2.f <- dff2.f %>%
+  filter(is.na(test))
+
+```
+
+Create Folds for internal validation (5-folds Repeated 5 times)
+**FOLDS REPEATED - Males Phase 1**
+```{r}
+# Partition training data into inner training data and validation data making sure same IDs are in the same group
+
+rand.seed <- sample(1:1000,10)
+folds.out <- list()
+
+for (i in 1:5) {
+  set.seed(rand.seed[i])
+  row_number <- matrix(1:422, 422) 
+
+  k.folds <- groupKFold(group = train1.m[,1], k = 5)
+
+  k.folds2 <- k.folds$Fold2
+  k.folds3 <- row_number[-k.folds2,]
+
+  k.folds4 <- k.folds$Fold1
+  k.folds5 <- row_number[-k.folds4,]
+
+  k.folds6 <- k.folds$Fold3
+  k.folds7 <- row_number[-k.folds6,]
+
+  k.folds8 <- k.folds$Fold4
+  k.folds9 <- row_number[-k.folds8,]
+
+  k.folds10 <- k.folds$Fold5
+  k.folds11 <- row_number[-k.folds10,]
+
+  folds.out[[i]] <- list(k.folds3, k.folds5, k.folds7, k.folds9, k.folds11)
+}
+
+folds.m1 <- flatten(folds.out)
+
+```
+
+**FOLDS REPEATED - Males Phase 2**
+```{r}
+# Partition training data into inner training data and validation data making sure same IDs are in the same group
+
+folds.out <- list()
+
+for (i in 1:5) {
+  set.seed(rand.seed[i])
+  row_number <- matrix(1:487, 487) 
+
+  k.folds <- groupKFold(group = train2.m[,1], k = 5)
+
+  k.folds2 <- k.folds$Fold2
+  k.folds3 <- row_number[-k.folds2,]
+
+  k.folds4 <- k.folds$Fold1
+  k.folds5 <- row_number[-k.folds4,]
+
+  k.folds6 <- k.folds$Fold3
+  k.folds7 <- row_number[-k.folds6,]
+
+  k.folds8 <- k.folds$Fold4
+  k.folds9 <- row_number[-k.folds8,]
+
+  k.folds10 <- k.folds$Fold5
+  k.folds11 <- row_number[-k.folds10,]
+
+  folds.out[[i]] <- list(k.folds3, k.folds5, k.folds7, k.folds9, k.folds11)
+}
+
+folds.m2 <- flatten(folds.out)
+
+```
+
+**FOLDS REPEATED - Females Phase 1**
+```{r}
+# Partition training data into inner training data and validation data making sure same IDs are in the same group
+
+folds.out <- list()
+
+for (i in 1:5) {
+  set.seed(rand.seed[i])
+  row_number <- matrix(1:459, 459) 
+
+  k.folds <- groupKFold(group = train1.f[,1], k = 5)
+
+  k.folds2 <- k.folds$Fold2
+  k.folds3 <- row_number[-k.folds2,]
+
+  k.folds4 <- k.folds$Fold1
+  k.folds5 <- row_number[-k.folds4,]
+
+  k.folds6 <- k.folds$Fold3
+  k.folds7 <- row_number[-k.folds6,]
+
+  k.folds8 <- k.folds$Fold4
+  k.folds9 <- row_number[-k.folds8,]
+
+  k.folds10 <- k.folds$Fold5
+  k.folds11 <- row_number[-k.folds10,]
+
+  folds.out[[i]] <- list(k.folds3, k.folds5, k.folds7, k.folds9, k.folds11)
+}
+
+folds.f1 <- flatten(folds.out)
+
+```
+
+**FOLDS REPEATED - Females Phase 2**
+```{r}
+# Partition training data into inner training data and validation data making sure same IDs are in the same group
+
+folds.out <- list()
+
+for (i in 1:5) {
+  set.seed(rand.seed[i])
+  row_number <- matrix(1:519, 519) 
+
+  k.folds <- groupKFold(group = train2.f[,1], k = 5)
+
+  k.folds2 <- k.folds$Fold2
+  k.folds3 <- row_number[-k.folds2,]
+
+  k.folds4 <- k.folds$Fold1
+  k.folds5 <- row_number[-k.folds4,]
+
+  k.folds6 <- k.folds$Fold3
+  k.folds7 <- row_number[-k.folds6,]
+
+  k.folds8 <- k.folds$Fold4
+  k.folds9 <- row_number[-k.folds8,]
+
+  k.folds10 <- k.folds$Fold5
+  k.folds11 <- row_number[-k.folds10,]
+
+  folds.out[[i]] <- list(k.folds3, k.folds5, k.folds7, k.folds9, k.folds11)
+}
+
+folds.f2 <- flatten(folds.out)
+
+```
+
+```{r}
+
+# Specify parameter grid, gp_model, and gpb.Dataset
+param_grid <- list("learning_rate" = c(1,0.1,0.01), "max_depth" = c(1,2,3,5,10,15),"min_data_in_leaf" = c(5,10,50,100), "lambda_l2" = c(0,1,10,25,50))
+other_params <- list(num_leaves = 2^10)
+
+
+```
+
+## S1 Freesurfer Thickness Alone
+Tree Boosting with Random Effects \
+https://github.com/fabsig/GPBoost \
+
+### Males 1 
+```{r}
+# convert data into matrix
+
+data_train <- dff1.m %>%
+  filter(is.na(test)) %>%
+  select(id, ScanAge, matches("thickness")) %>%
+  as.matrix()
+
+data_test <- dff1.m %>%
+  filter(test == 1) %>%
+  select(id, ScanAge, matches("thickness")) %>%
+  as.matrix()
+
+# Define fixed effects predictor variables
+pred_vars <- colnames(data_train)[3:70]
+
+gp_model <- GPModel(group_data = data_train[,"id"], likelihood = "gaussian")
+data_bst <- gpb.Dataset(data = data_train[,pred_vars], label = data_train[,"ScanAge"])
+
+```
+
+
+```{r}
+
+# Find optimal tuning parameters
+opt_params <- gpb.grid.search.tune.parameters(
+  param_grid = param_grid, 
+  params = other_params,
+  num_try_random = NULL, 
+  folds = folds.m1,
+  data = data_bst, 
+  gp_model = gp_model,
+  nrounds = 2000, 
+  early_stopping_rounds = 10,
+  verbose_eval = 1, metric = c("rmse"))
+
+opt_params
+
+```
+
+
+```{r}
+
+params <- list(learning_rate = 0.01, max_depth = 5, num_leaves = 2^10, min_data_in_leaf = 5, lambda_l2 = 50)
+nrounds <- 364
+gpb.out <- gpb.train(data = data_bst, gp_model = gp_model, 
+                   nrounds = nrounds, params = params, verbose = 1)
+summary(gp_model)
+
+```
+
+### SHAP
+```{r}
+
+s1.out.m1 <- gpb.out
+mod.s1.m1 <- shap.plot.summary.wrap1(s1.out.m1, X = data_train[,pred_vars], top_n=30) +  ggtitle("SHAP values")
+
+mod.s1.m1
+
+```
+
+### Predict Age in Test 
+```{r}
+
+
+pred <- predict(s1.out.m1, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+test_dat1.m$gpb_pred_s1 <- pred[["response_mean"]]
+
+```
+
+### Males 2
+```{r}
+# convert data into matrix
+
+data_train <- dff2.m %>%
+  filter(is.na(test)) %>%
+  select(id, ScanAge, matches("thickness")) %>%
+  as.matrix()
+
+data_test <- dff2.m %>%
+  filter(test == 1) %>%
+  select(id, ScanAge, matches("thickness")) %>%
+  as.matrix()
+
+# Define fixed effects predictor variables
+pred_vars <- colnames(data_train)[3:70]
+
+gp_model <- GPModel(group_data = data_train[,"id"], likelihood = "gaussian")
+data_bst <- gpb.Dataset(data = data_train[,pred_vars], label = data_train[,"ScanAge"])
+
+```
+
+
+```{r}
+
+# Find optimal tuning parameters
+opt_params <- gpb.grid.search.tune.parameters(
+  param_grid = param_grid, 
+  params = other_params,
+  num_try_random = NULL, 
+  folds = folds.m2,
+  data = data_bst, 
+  gp_model = gp_model,
+  nrounds = 2000, 
+  early_stopping_rounds = 10,
+  verbose_eval = 1, metric = c("rmse"))
+
+opt_params
+
+```
+
+```{r}
+
+params <- list(learning_rate = 0.01, max_depth = 5, num_leaves = 2^10, min_data_in_leaf = 5, lambda_l2 = 50)
+nrounds <- 1086
+gpb.out <- gpb.train(data = data_bst, gp_model = gp_model, 
+                   nrounds = nrounds, params = params, verbose = 1)
+summary(gp_model)
+
+```
+
+### SHAP
+```{r}
+
+s1.out.m2 <- gpb.out
+mod.s1.m2 <- shap.plot.summary.wrap1(s1.out.m2, X = data_train[,pred_vars], top_n=30) +  ggtitle("SHAP values")
+
+mod.s1.m2
+
+```
+
+### Predict Age in Test 
+```{r}
+
+
+pred <- predict(s1.out.m2, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+test_dat2.m$gpb_pred_s1 <- pred[["response_mean"]]
+
+
+```
+
+### Females 1
+```{r}
+# convert data into matrix
+
+data_train <- dff1.f %>%
+  filter(is.na(test)) %>%
+  select(id, ScanAge, matches("thickness")) %>%
+  as.matrix()
+
+data_test <- dff1.f %>%
+  filter(test == 1) %>%
+  select(id, ScanAge, matches("thickness")) %>%
+  as.matrix()
+
+# Define fixed effects predictor variables
+pred_vars <- colnames(data_train)[3:70]
+
+gp_model <- GPModel(group_data = data_train[,"id"], likelihood = "gaussian")
+data_bst <- gpb.Dataset(data = data_train[,pred_vars], label = data_train[,"ScanAge"])
+
+```
+
+```{r}
+
+# Find optimal tuning parameters
+opt_params <- gpb.grid.search.tune.parameters(
+  param_grid = param_grid, 
+  params = other_params,
+  num_try_random = NULL, 
+  folds = folds.f1,
+  data = data_bst, 
+  gp_model = gp_model,
+  nrounds = 2000, 
+  early_stopping_rounds = 10,
+  verbose_eval = 1, metric = c("rmse"))
+
+opt_params
+
+```
+
+```{r}
+
+params <- list(learning_rate = 0.1, max_depth = 1, num_leaves = 2^10, min_data_in_leaf = 50, lambda_l2 = 0)
+nrounds <- 237
+gpb.out <- gpb.train(data = data_bst, gp_model = gp_model, 
+                   nrounds = nrounds, params = params, verbose = 1)
+summary(gp_model)
+
+```
+
+### SHAP
+```{r}
+
+s1.out.f1 <- gpb.out
+mod.s1.f1 <- shap.plot.summary.wrap1(s1.out.f1, X = data_train[,pred_vars], top_n=30) +  ggtitle("SHAP values")
+
+mod.s1.f1
+
+```
+
+### Predict Age in Test 
+```{r}
+
+
+pred <- predict(s1.out.f1, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+test_dat1.f$gpb_pred_s1 <- pred[["response_mean"]]
+
+```
+
+### Females 2
+```{r}
+# convert data into matrix
+
+data_train <- dff2.f %>%
+  filter(is.na(test)) %>%
+  select(id, ScanAge, matches("thickness")) %>%
+  as.matrix()
+
+data_test <- dff2.f %>%
+  filter(test == 1) %>%
+  select(id, ScanAge, matches("thickness")) %>%
+  as.matrix()
+
+# Define fixed effects predictor variables
+pred_vars <- colnames(data_train)[3:70]
+
+gp_model <- GPModel(group_data = data_train[,"id"], likelihood = "gaussian")
+data_bst <- gpb.Dataset(data = data_train[,pred_vars], label = data_train[,"ScanAge"])
+
+```
+
+```{r}
+
+# Find optimal tuning parameters
+opt_params <- gpb.grid.search.tune.parameters(
+  param_grid = param_grid, 
+  params = other_params,
+  num_try_random = NULL, 
+  folds = folds.f2,
+  data = data_bst, 
+  gp_model = gp_model,
+  nrounds = 2000, 
+  early_stopping_rounds = 10,
+  verbose_eval = 1, metric = c("rmse"))
+
+opt_params
+
+```
+
+```{r}
+
+params <- list(learning_rate = 0.1, max_depth = 10, num_leaves = 2^10, min_data_in_leaf = 50, lambda_l2 = 25)
+nrounds <- 130
+gpb.out <- gpb.train(data = data_bst, gp_model = gp_model, 
+                   nrounds = nrounds, params = params, verbose = 1)
+summary(gp_model)
+
+```
+
+### SHAP
+```{r}
+
+s1.out.f2 <- gpb.out
+mod.s1.f2 <- shap.plot.summary.wrap1(s1.out.f2, X = data_train[,pred_vars], top_n=30) +  ggtitle("SHAP values")
+
+mod.s1.f2
+
+```
+
+### Predict Age in Test 
+```{r}
+
+
+pred <- predict(s1.out.f2, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+test_dat2.f$gpb_pred_s1 <- pred[["response_mean"]]
+
+
+```
+
+
+## S2 Freesurfer Thickness + Subcort
+### Males 1
+```{r}
+# convert data into matrix
+
+data_train <- dff1.m %>%
+  filter(is.na(test)) %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right")) %>%
+  as.matrix()
+
+data_test <- dff1.m %>%
+  filter(test == 1) %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right")) %>%
+  as.matrix()
+
+# Define fixed effects predictor variables
+pred_vars <- colnames(data_train)[3:84]
+
+gp_model <- GPModel(group_data = data_train[,"id"], likelihood = "gaussian")
+data_bst <- gpb.Dataset(data = data_train[,pred_vars], label = data_train[,"ScanAge"])
+
+```
+
+
+```{r}
+
+# Find optimal tuning parameters
+opt_params <- gpb.grid.search.tune.parameters(
+  param_grid = param_grid, 
+  params = other_params,
+  num_try_random = NULL, 
+  folds = folds.m1,
+  data = data_bst, 
+  gp_model = gp_model,
+  nrounds = 2000, 
+  early_stopping_rounds = 10,
+  verbose_eval = 1, metric = c("rmse"))
+
+opt_params
+
+```
+
+
+```{r}
+
+params <- list(learning_rate = 0.1, max_depth = 3, num_leaves = 2^10, min_data_in_leaf = 5, lambda_l2 = 50)
+nrounds <- 52
+gpb.out <- gpb.train(data = data_bst, gp_model = gp_model, 
+                   nrounds = nrounds, params = params, verbose = 1)
+summary(gp_model)
+
+```
+
+### SHAP
+```{r}
+
+s2.out.m1 <- gpb.out
+mod.s2.m1 <- shap.plot.summary.wrap1(s2.out.m1, X = data_train[,pred_vars], top_n=30) +  ggtitle("SHAP values")
+
+mod.s2.m1
+
+```
+
+### Predict Age in Test 
+```{r}
+
+pred <- predict(s2.out.m1, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+test_dat1.m$gpb_pred_s2 <- pred[["response_mean"]]
+
+```
+
+### Males 2
+```{r}
+# convert data into matrix
+
+data_train <- dff2.m %>%
+  filter(is.na(test)) %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right")) %>%
+  as.matrix()
+
+
+data_test <- dff2.m %>%
+  filter(test == 1) %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right")) %>%
+  as.matrix()
+
+# Define fixed effects predictor variables
+pred_vars <- colnames(data_train)[3:84]
+
+gp_model <- GPModel(group_data = data_train[,"id"], likelihood = "gaussian")
+data_bst <- gpb.Dataset(data = data_train[,pred_vars], label = data_train[,"ScanAge"])
+
+```
+
+
+```{r}
+
+# Find optimal tuning parameters
+opt_params <- gpb.grid.search.tune.parameters(
+  param_grid = param_grid, 
+  params = other_params,
+  num_try_random = NULL, 
+  folds = folds.m2,
+  data = data_bst, 
+  gp_model = gp_model,
+  nrounds = 2000, 
+  early_stopping_rounds = 10,
+  verbose_eval = 1, metric = c("rmse"))
+
+opt_params
+
+```
+
+```{r}
+
+params <- list(learning_rate = 0.01, max_depth = 3, num_leaves = 2^10, min_data_in_leaf = 5, lambda_l2 = 50)
+nrounds <- 1689
+gpb.out <- gpb.train(data = data_bst, gp_model = gp_model, 
+                   nrounds = nrounds, params = params, verbose = 1)
+summary(gp_model)
+
+```
+
+### SHAP
+```{r}
+
+s2.out.m2 <- gpb.out
+mod.s2.m2 <- shap.plot.summary.wrap1(s2.out.m2, X = data_train[,pred_vars], top_n=30) +  ggtitle("SHAP values")
+
+mod.s2.m2
+
+```
+
+### Predict Age in Test 
+```{r}
+
+pred <- predict(s2.out.m2, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+test_dat2.m$gpb_pred_s2 <- pred[["response_mean"]]
+
+```
+
+### Females 1
+```{r}
+# convert data into matrix
+
+data_train <- dff1.f %>%
+  filter(is.na(test)) %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right")) %>%
+  as.matrix()
+
+data_test <- dff1.f %>%
+  filter(test == 1) %>%
+  select(id, ScanAge, matches("thickness"), matches("Left|Right")) %>%
+  as.matrix()
+
+# Define fixed effects predictor variables
+pred_vars <- colnames(data_train)[3:84]
+
+gp_model <- GPModel(group_data = data_train[,"id"], likelihood = "gaussian")
+data_bst <- gpb.Dataset(data = data_train[,pred_vars], label = data_train[,"ScanAge"])
+
+
+```
+
+```{r}
+
+# Find optimal tuning parameters
+opt_params <- gpb.grid.search.tune.parameters(
+  param_grid = param_grid, 
+  params = other_params,
+  num_try_random = NULL, 
+  folds = folds.f1,
+  data = data_bst, 
+  gp_model = gp_model,
+  nrounds = 2000, 
+  early_stopping_rounds = 10,
+  verbose_eval = 1, metric = c("rmse"))
+
+opt_params
+
+```
+
+```{r}
+
+params <- list(learning_rate = 0.01, max_depth = 5, num_leaves = 2^10, min_data_in_leaf = 5, lambda_l2 = 50)
+nrounds <- 343
+gpb.out <- gpb.train(data = data_bst, gp_model = gp_model, 
+                   nrounds = nrounds, params = params, verbose = 1)
+summary(gp_model)
+
+```
+
+### SHAP
+```{r}
+
+s2.out.f1 <- gpb.out
+mod.s2.f1 <- shap.plot.summary.wrap1(s2.out.f1, X = data_train[,pred_vars], top_n=30) +  ggtitle("SHAP values")
+
+mod.s2.f1
+
+```
+
+### Predict Age in Test 
+```{r}
+
+
+pred <- predict(s2.out.f1, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+test_dat1.f$gpb_pred_s2 <- pred[["response_mean"]]
+
+```
+
+### Females 2
+```{r}
+# convert data into matrix
+
+data_train <- dff2.f %>%
+  filter(is.na(test)) %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right")) %>%
+  as.matrix()
+
+data_test <- dff2.f %>%
+  filter(test == 1) %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right")) %>%
+  as.matrix()
+
+# Define fixed effects predictor variables
+pred_vars <- colnames(data_train)[3:84]
+
+gp_model <- GPModel(group_data = data_train[,"id"], likelihood = "gaussian")
+data_bst <- gpb.Dataset(data = data_train[,pred_vars], label = data_train[,"ScanAge"])
+
+```
+
+```{r}
+
+# Find optimal tuning parameters
+opt_params <- gpb.grid.search.tune.parameters(
+  param_grid = param_grid, 
+  params = other_params,
+  num_try_random = NULL, 
+  folds = folds.f2,
+  data = data_bst, 
+  gp_model = gp_model,
+  nrounds = 2000, 
+  early_stopping_rounds = 10,
+  verbose_eval = 1, metric = c("rmse"))
+
+opt_params
+
+```
+
+```{r}
+
+params <- list(learning_rate = 0.01, max_depth = 5, num_leaves = 2^10, min_data_in_leaf = 5, lambda_l2 = 50)
+nrounds <- 846
+gpb.out <- gpb.train(data = data_bst, gp_model = gp_model, 
+                   nrounds = nrounds, params = params, verbose = 1)
+summary(gp_model)
+
+```
+
+### SHAP
+```{r}
+
+s2.out.f2 <- gpb.out
+mod.s2.f2 <- shap.plot.summary.wrap1(s2.out.f2, X = data_train[,pred_vars], top_n=30) +  ggtitle("SHAP values")
+
+mod.s2.f2
+
+```
+
+### Predict Age in Test 
+```{r}
+
+pred <- predict(s2.out.f2, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+test_dat2.f$gpb_pred_s2 <- pred[["response_mean"]]
+
+```
+
+## F1 Functional Measures
+### Males 1
+```{r}
+# convert data into matrix
+
+data_train <- dff1.m %>%
+  filter(is.na(test)) %>%
+  select(id, ScanAge, starts_with("Int"), starts_with("Rec."), modularity.combat) %>%
+  as.matrix()
+
+data_test <- dff1.m %>%
+  filter(test == 1) %>%
+  select(id, ScanAge, starts_with("Int"), starts_with("Rec."), modularity.combat) %>%
+  as.matrix()
+
+# Define fixed effects predictor variables
+pred_vars <- colnames(data_train)[3:156]
+
+gp_model <- GPModel(group_data = data_train[,"id"], likelihood = "gaussian")
+data_bst <- gpb.Dataset(data = data_train[,pred_vars], label = data_train[,"ScanAge"])
+
+
+```
+
+```{r}
+
+# Find optimal tuning parameters
+opt_params <- gpb.grid.search.tune.parameters(
+  param_grid = param_grid, 
+  params = other_params,
+  num_try_random = NULL, 
+  folds = folds.m1,
+  data = data_bst, 
+  gp_model = gp_model,
+  nrounds = 2000, 
+  early_stopping_rounds = 10,
+  verbose_eval = 1, metric = c("rmse"))
+
+opt_params
+
+```
+
+
+```{r}
+
+params <- list(learning_rate = 0.01, max_depth = 5, num_leaves = 2^10, min_data_in_leaf = 10, lambda_l2 = 0)
+nrounds <- 172
+gpb.out <- gpb.train(data = data_bst, gp_model = gp_model, 
+                   nrounds = nrounds, params = params, verbose = 1)
+summary(gp_model)
+
+```
+
+### SHAP
+```{r}
+
+f1.out.m1 <- gpb.out
+mod.f1.m1 <- shap.plot.summary.wrap1(f1.out.m1, X = data_train[,pred_vars], top_n=30) +  ggtitle("SHAP values")
+
+mod.f1.m1
+
+```
+
+### Predict Age in Test 
+```{r}
+
+pred <- predict(f1.out.m1, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+test_dat1.m$gpb_pred_f1 <- pred[["response_mean"]]
+
+```
+
+
+### Males 2
+```{r}
+# convert data into matrix
+
+data_train <- dff2.m %>%
+  filter(is.na(test)) %>%
+  select(id, ScanAge, starts_with("Int"), starts_with("Rec."), modularity.combat) %>%
+  as.matrix()
+
+data_test <- dff2.m %>%
+  filter(test == 1) %>%
+  select(id, ScanAge, starts_with("Int"), starts_with("Rec."), modularity.combat) %>%
+  as.matrix()
+
+# Define fixed effects predictor variables
+pred_vars <- colnames(data_train)[3:156]
+
+gp_model <- GPModel(group_data = data_train[,"id"], likelihood = "gaussian")
+data_bst <- gpb.Dataset(data = data_train[,pred_vars], label = data_train[,"ScanAge"])
+
+
+```
+
+```{r}
+
+# Find optimal tuning parameters
+opt_params <- gpb.grid.search.tune.parameters(
+  param_grid = param_grid, 
+  params = other_params,
+  num_try_random = NULL, 
+  folds = folds.m2,
+  data = data_bst, 
+  gp_model = gp_model,
+  nrounds = 2000, 
+  early_stopping_rounds = 10,
+  verbose_eval = 1, metric = c("rmse"))
+
+opt_params
+
+```
+
+```{r}
+
+params <- list(learning_rate = 0.1, max_depth = 2, num_leaves = 2^10, min_data_in_leaf = 10, lambda_l2 = 0)
+nrounds <- 159
+gpb.out <- gpb.train(data = data_bst, gp_model = gp_model, 
+                   nrounds = nrounds, params = params, verbose = 1)
+summary(gp_model)
+
+```
+
+### SHAP
+```{r}
+
+f1.out.m2 <- gpb.out
+mod.f1.m2 <- shap.plot.summary.wrap1(f1.out.m2, X = data_train[,pred_vars], top_n=30) +  ggtitle("SHAP values")
+
+mod.f1.m2
+
+```
+
+### Predict Age in Test 
+```{r}
+
+pred <- predict(f1.out.m2, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+test_dat2.m$gpb_pred_f1 <- pred[["response_mean"]]
+
+```
+
+
+### Females 1
+```{r}
+# convert data into matrix
+
+data_train <- dff1.f %>%
+  filter(is.na(test)) %>%
+  select(id, ScanAge, starts_with("Int"), starts_with("Rec."), modularity.combat) %>%
+  as.matrix()
+
+data_test <- dff1.f %>%
+  filter(test == 1) %>%
+  select(id, ScanAge, starts_with("Int"), starts_with("Rec."), modularity.combat) %>%
+  as.matrix()
+
+# Define fixed effects predictor variables
+pred_vars <- colnames(data_train)[3:156]
+
+gp_model <- GPModel(group_data = data_train[,"id"], likelihood = "gaussian")
+data_bst <- gpb.Dataset(data = data_train[,pred_vars], label = data_train[,"ScanAge"])
+
+
+```
+
+```{r}
+
+# Find optimal tuning parameters
+opt_params <- gpb.grid.search.tune.parameters(
+  param_grid = param_grid, 
+  params = other_params,
+  num_try_random = NULL, 
+  folds = folds.f1,
+  data = data_bst, 
+  gp_model = gp_model,
+  nrounds = 2000, 
+  early_stopping_rounds = 10,
+  verbose_eval = 1, metric = c("rmse"))
+
+opt_params
+
+```
+
+
+```{r}
+
+params <- list(learning_rate = 0.01, max_depth = 15, num_leaves = 2^10, min_data_in_leaf = 5, lambda_l2 = 10)
+nrounds <- 135
+gpb.out <- gpb.train(data = data_bst, gp_model = gp_model, 
+                   nrounds = nrounds, params = params, verbose = 1)
+summary(gp_model)
+
+```
+
+### SHAP
+```{r}
+
+f1.out.f1 <- gpb.out
+mod.f1.f1 <- shap.plot.summary.wrap1(f1.out.f1, X = data_train[,pred_vars], top_n=30) +  ggtitle("SHAP values")
+
+mod.f1.f1
+
+```
+
+### Predict Age in Test 
+```{r}
+
+pred <- predict(f1.out.f1, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+test_dat1.f$gpb_pred_f1 <- pred[["response_mean"]]
+
+```
+
+### Females 2
+```{r}
+# convert data into matrix
+
+data_train <- dff2.f %>%
+  filter(is.na(test)) %>%
+  select(id, ScanAge, starts_with("Int"), starts_with("Rec."), modularity.combat) %>%
+  as.matrix()
+
+data_test <- dff2.f %>%
+  filter(test == 1) %>%
+  select(id, ScanAge, starts_with("Int"), starts_with("Rec."), modularity.combat) %>%
+  as.matrix()
+
+# Define fixed effects predictor variables
+pred_vars <- colnames(data_train)[3:156]
+
+gp_model <- GPModel(group_data = data_train[,"id"], likelihood = "gaussian")
+data_bst <- gpb.Dataset(data = data_train[,pred_vars], label = data_train[,"ScanAge"])
+
+
+```
+
+```{r}
+
+# Find optimal tuning parameters
+opt_params <- gpb.grid.search.tune.parameters(
+  param_grid = param_grid, 
+  params = other_params,
+  num_try_random = NULL, 
+  folds = folds.f2,
+  data = data_bst, 
+  gp_model = gp_model,
+  nrounds = 2000, 
+  early_stopping_rounds = 10,
+  verbose_eval = 1, metric = c("rmse"))
+
+opt_params
+
+```
+
+```{r}
+
+params <- list(learning_rate = 0.1, max_depth = 3, num_leaves = 2^10, min_data_in_leaf = 50, lambda_l2 = 50)
+nrounds <- 347
+gpb.out <- gpb.train(data = data_bst, gp_model = gp_model, 
+                   nrounds = nrounds, params = params, verbose = 1)
+summary(gp_model)
+
+```
+### SHAP
+```{r}
+
+f1.out.f2 <- gpb.out
+mod.f1.f2 <- shap.plot.summary.wrap1(f1.out.f2, X = data_train[,pred_vars], top_n=30) +  ggtitle("SHAP values")
+
+mod.f1.f2
+
+```
+
+### Predict Age in Test 
+```{r}
+
+pred <- predict(f1.out.f2, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+test_dat2.f$gpb_pred_f1 <- pred[["response_mean"]]
+
+```
+
+## A1 Freesurfer Thickness + Subcort + 17 FC recruitment
+### Males 1
+```{r}
+# convert data into matrix
+
+data_train <- dff1.m %>%
+  filter(is.na(test)) %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right"), starts_with("Rec."), modularity.combat) %>%
+  as.matrix()
+
+data_test <- dff1.m %>%
+  filter(test == 1) %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right"), starts_with("Rec."), modularity.combat) %>%
+  as.matrix()
+
+# Define fixed effects predictor variables
+pred_vars <- colnames(data_train)[3:102]
+
+gp_model <- GPModel(group_data = data_train[,"id"], likelihood = "gaussian")
+data_bst <- gpb.Dataset(data = data_train[,pred_vars], label = data_train[,"ScanAge"])
+
+
+```
+
+```{r}
+
+# Find optimal tuning parameters
+opt_params <- gpb.grid.search.tune.parameters(
+  param_grid = param_grid, 
+  params = other_params,
+  num_try_random = NULL, 
+  folds = folds.m1,
+  data = data_bst, 
+  gp_model = gp_model,
+  nrounds = 2000, 
+  early_stopping_rounds = 10,
+  verbose_eval = 1, metric = c("rmse"))
+
+opt_params
+
+```
+
+
+```{r}
+
+params <- list(learning_rate = 0.01, max_depth = 3, num_leaves = 2^10, min_data_in_leaf = 5, lambda_l2 = 50)
+nrounds <- 546
+gpb.out <- gpb.train(data = data_bst, gp_model = gp_model, 
+                   nrounds = nrounds, params = params, verbose = 1)
+summary(gp_model)
+
+```
+
+### SHAP
+```{r}
+
+a1.out.m1 <- gpb.out
+mod.a1.m1 <- shap.plot.summary.wrap1(a1.out.m1, X = data_train[,pred_vars], top_n=30) +  ggtitle("SHAP values")
+
+mod.a1.m1
+
+```
+
+### Predict Age in Test 
+```{r}
+
+pred <- predict(a1.out.m1, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+test_dat1.m$gpb_pred_a1 <- pred[["response_mean"]]
+
+```
+
+### Males 2
+```{r}
+# convert data into matrix
+
+data_train <- dff2.m %>%
+  filter(is.na(test)) %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right"), starts_with("Rec."), modularity.combat) %>%
+  as.matrix()
+
+
+data_test <- dff2.m %>%
+  filter(test == 1) %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right"), starts_with("Rec."), modularity.combat) %>%
+  as.matrix()
+
+# Define fixed effects predictor variables
+pred_vars <- colnames(data_train)[3:102]
+
+gp_model <- GPModel(group_data = data_train[,"id"], likelihood = "gaussian")
+data_bst <- gpb.Dataset(data = data_train[,pred_vars], label = data_train[,"ScanAge"])
+
+```
+
+
+```{r}
+
+# Find optimal tuning parameters
+opt_params <- gpb.grid.search.tune.parameters(
+  param_grid = param_grid, 
+  params = other_params,
+  num_try_random = NULL, 
+  folds = folds.m2,
+  data = data_bst, 
+  gp_model = gp_model,
+  nrounds = 2000, 
+  early_stopping_rounds = 10,
+  verbose_eval = 1, metric = c("rmse"))
+
+opt_params
+
+```
+
+```{r}
+
+params <- list(learning_rate = 0.01, max_depth = 5, num_leaves = 2^10, min_data_in_leaf = 10, lambda_l2 = 25)
+nrounds <- 822
+gpb.out <- gpb.train(data = data_bst, gp_model = gp_model, 
+                   nrounds = nrounds, params = params, verbose = 1)
+summary(gp_model)
+
+```
+
+### SHAP
+```{r}
+
+a1.out.m2 <- gpb.out
+mod.a1.m2 <- shap.plot.summary.wrap1(a1.out.m2, X = data_train[,pred_vars], top_n=30) +  ggtitle("SHAP values")
+
+mod.a1.m2
+
+```
+
+### Predict Age in Test 
+```{r}
+
+pred <- predict(a1.out.m2, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+test_dat2.m$gpb_pred_a1 <- pred[["response_mean"]]
+
+```
+
+
+### Females 1
+```{r}
+# convert data into matrix
+
+data_train <- dff1.f %>%
+  filter(is.na(test)) %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right"), starts_with("Rec."), modularity.combat) %>%
+  as.matrix()
+
+data_test <- dff1.f %>%
+  filter(test == 1) %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right"), starts_with("Rec."), modularity.combat) %>%
+  as.matrix()
+
+# Define fixed effects predictor variables
+pred_vars <- colnames(data_train)[3:102]
+
+gp_model <- GPModel(group_data = data_train[,"id"], likelihood = "gaussian")
+data_bst <- gpb.Dataset(data = data_train[,pred_vars], label = data_train[,"ScanAge"])
+
+
+```
+
+```{r}
+
+# Find optimal tuning parameters
+opt_params <- gpb.grid.search.tune.parameters(
+  param_grid = param_grid, 
+  params = other_params,
+  num_try_random = NULL, 
+  folds = folds.f1,
+  data = data_bst, 
+  gp_model = gp_model,
+  nrounds = 2000, 
+  early_stopping_rounds = 10,
+  verbose_eval = 1, metric = c("rmse"))
+
+opt_params
+
+```
+
+```{r}
+
+params <- list(learning_rate = 0.01, max_depth = 5, num_leaves = 2^10, min_data_in_leaf = 5, lambda_l2 = 50)
+nrounds <- 331
+gpb.out <- gpb.train(data = data_bst, gp_model = gp_model, 
+                   nrounds = nrounds, params = params, verbose = 1)
+
+summary(gp_model)
+
+```
+
+### SHAP
+```{r}
+
+a1.out.f1 <- gpb.out
+mod.a1.f1 <- shap.plot.summary.wrap1(a1.out.f1, X = data_train[,pred_vars], top_n=30) +  ggtitle("SHAP values")
+
+mod.a1.f1
+
+```
+
+### Predict Age in Test 
+```{r}
+
+pred <- predict(a1.out.f1, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+test_dat1.f$gpb_pred_a1 <- pred[["response_mean"]]
+
+```
+
+
+### Females 2
+```{r}
+# convert data into matrix
+
+data_train <- dff2.f %>%
+  filter(is.na(test)) %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right"), starts_with("Rec."), modularity.combat) %>%
+  as.matrix()
+
+data_test <- dff2.f %>%
+  filter(test == 1) %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right"), starts_with("Rec."), modularity.combat) %>%
+  as.matrix()
+
+# Define fixed effects predictor variables
+pred_vars <- colnames(data_train)[3:102]
+
+gp_model <- GPModel(group_data = data_train[,"id"], likelihood = "gaussian")
+data_bst <- gpb.Dataset(data = data_train[,pred_vars], label = data_train[,"ScanAge"])
+
+```
+
+```{r}
+
+# Find optimal tuning parameters
+opt_params <- gpb.grid.search.tune.parameters(
+  param_grid = param_grid, 
+  params = other_params,
+  num_try_random = NULL, 
+  folds = folds.f2,
+  data = data_bst, 
+  gp_model = gp_model,
+  nrounds = 2000, 
+  early_stopping_rounds = 10,
+  verbose_eval = 1, metric = c("rmse"))
+
+opt_params
+
+```
+
+```{r}
+
+params <- list(learning_rate = 0.01, max_depth = 5, num_leaves = 2^10, min_data_in_leaf = 5, lambda_l2 = 50)
+nrounds <- 811
+gpb.out <- gpb.train(data = data_bst, gp_model = gp_model, 
+                   nrounds = nrounds, params = params, verbose = 1)
+summary(gp_model)
+
+```
+
+### SHAP
+```{r}
+
+a1.out.f2 <- gpb.out
+mod.a1.f2 <- shap.plot.summary.wrap1(a1.out.f2, X = data_train[,pred_vars], top_n=30) +  ggtitle("SHAP values")
+
+mod.a1.f2
+
+```
+
+### Predict Age in Test 
+```{r}
+
+pred <- predict(a1.out.f2, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+test_dat2.f$gpb_pred_a1 <- pred[["response_mean"]]
+
+```
+
+
+## A2 Freesurfer Thickness + Subcort + 17 FC Integration
+### Males 1
+```{r}
+# convert data into matrix
+
+data_train <- dff1.m %>%
+  filter(is.na(test)) %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right"), starts_with("Int"), modularity.combat) %>%
+  as.matrix()
+
+data_test <- dff1.m %>%
+  filter(test == 1) %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right"), starts_with("Int"), modularity.combat) %>%
+  as.matrix()
+
+# Define fixed effects predictor variables
+pred_vars <- colnames(data_train)[3:221]
+
+gp_model <- GPModel(group_data = data_train[,"id"], likelihood = "gaussian")
+data_bst <- gpb.Dataset(data = data_train[,pred_vars], label = data_train[,"ScanAge"])
+
+
+```
+
+```{r}
+
+# Find optimal tuning parameters
+opt_params <- gpb.grid.search.tune.parameters(
+  param_grid = param_grid, 
+  params = other_params,
+  num_try_random = NULL, 
+  folds = folds.m1,
+  data = data_bst, 
+  gp_model = gp_model,
+  nrounds = 2000, 
+  early_stopping_rounds = 10,
+  verbose_eval = 1, metric = c("rmse"))
+
+opt_params
+
+```
+
+```{r}
+
+params <- list(learning_rate = 0.01, max_depth = 3, num_leaves = 2^10, min_data_in_leaf = 10, lambda_l2 = 1)
+nrounds <- 301
+gpb.out <- gpb.train(data = data_bst, gp_model = gp_model, 
+                   nrounds = nrounds, params = params, verbose = 1)
+summary(gp_model)
+
+```
+
+### SHAP
+#### Plot
+```{r}
+
+a2.out.m1 <- gpb.out
+mod.a2.m1 <- shap.plot.summary.wrap1(a2.out.m1, X = data_train[,pred_vars], top_n=30) +  ggtitle("SHAP values")
+
+mod.a2.m1
+
+```
+
+### Predict Age in Test 
+```{r}
+
+pred <- predict(a2.out.m1, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+test_dat1.m$gpb_pred_a2 <- pred[["response_mean"]]
+
+```
+
+
+### Males 2
+```{r}
+# convert data into matrix
+
+data_train <- dff2.m %>%
+  filter(is.na(test)) %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right"), starts_with("Int"), modularity.combat) %>%
+  as.matrix()
+
+
+data_test <- dff2.m %>%
+  filter(test == 1) %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right"), starts_with("Int"), modularity.combat) %>%
+  as.matrix()
+
+# Define fixed effects predictor variables
+pred_vars <- colnames(data_train)[3:221]
+
+gp_model <- GPModel(group_data = data_train[,"id"], likelihood = "gaussian")
+data_bst <- gpb.Dataset(data = data_train[,pred_vars], label = data_train[,"ScanAge"])
+
+```
+
+
+```{r}
+
+# Find optimal tuning parameters
+opt_params <- gpb.grid.search.tune.parameters(
+  param_grid = param_grid, 
+  params = other_params,
+  num_try_random = NULL, 
+  folds = folds.m2,
+  data = data_bst, 
+  gp_model = gp_model,
+  nrounds = 2000, 
+  early_stopping_rounds = 10,
+  verbose_eval = 1, metric = c("rmse"))
+
+opt_params
+
+```
+
+```{r}
+
+params <- list(learning_rate = 0.01, max_depth = 3, num_leaves = 2^10, min_data_in_leaf = 10, lambda_l2 = 10)
+nrounds <- 1029
+gpb.out <- gpb.train(data = data_bst, gp_model = gp_model, 
+                   nrounds = nrounds, params = params, verbose = 1)
+summary(gp_model)
+
+```
+
+### SHAP
+#### Plot
+```{r}
+
+a2.out.m2 <- gpb.out
+mod.a2.m2 <- shap.plot.summary.wrap1(a2.out.m2, X = data_train[,pred_vars], top_n=30) +  ggtitle("SHAP values")
+
+mod.a2.m2
+
+```
+
+### Predict Age in Test 
+```{r}
+
+pred <- predict(a2.out.m2, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+test_dat2.m$gpb_pred_a2 <- pred[["response_mean"]]
+
+hist(test_dat2.m$ScanAge)
+hist(test_dat2.m$gpb_pred_a2)
+
+cor.test(test_dat2.m$ScanAge, test_dat2.m$gpb_pred_a2)
+
+test.gpb <- test_dat2.m %>%
+  select(subjid, time, ScanAge, gpb_pred_a2) %>%
+  mutate(gpb_pad = gpb_pred_a2 - ScanAge) %>% 
+  mutate(gpb_mae = abs(ScanAge-gpb_pred_a2)) 
+
+round(mean(test.gpb$gpb_mae),3)
+round(sd(test.gpb$gpb_mae),3)
+
+```
+
+
+### Females 1
+```{r}
+# convert data into matrix
+
+data_train <- dff1.f %>%
+  filter(is.na(test)) %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right"), starts_with("Int"), modularity.combat) %>%
+  as.matrix()
+
+data_test <- dff1.f %>%
+  filter(test == 1) %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right"), starts_with("Int"), modularity.combat) %>%
+  as.matrix()
+
+# Define fixed effects predictor variables
+pred_vars <- colnames(data_train)[3:221]
+
+gp_model <- GPModel(group_data = data_train[,"id"], likelihood = "gaussian")
+data_bst <- gpb.Dataset(data = data_train[,pred_vars], label = data_train[,"ScanAge"])
+
+
+```
+
+```{r}
+
+# Find optimal tuning parameters
+opt_params <- gpb.grid.search.tune.parameters(
+  param_grid = param_grid, 
+  params = other_params,
+  num_try_random = NULL, 
+  folds = folds.f1,
+  data = data_bst, 
+  gp_model = gp_model,
+  nrounds = 2000, 
+  early_stopping_rounds = 10,
+  verbose_eval = 1, metric = c("rmse"))
+
+opt_params
+
+```
+
+```{r}
+
+params <- list(learning_rate = 0.01, max_depth = 2, num_leaves = 2^10, min_data_in_leaf = 10, lambda_l2 = 0)
+nrounds <- 652
+gpb.out <- gpb.train(data = data_bst, gp_model = gp_model, 
+                   nrounds = nrounds, params = params, verbose = 1)
+summary(gp_model)
+
+```
+
+### SHAP
+#### Plot
+```{r}
+
+a2.out.f1 <- gpb.out
+mod.a2.f1 <- shap.plot.summary.wrap1(a2.out.f1, X = data_train[,pred_vars], top_n=30) +  ggtitle("SHAP values")
+
+mod.a2.f1
+
+```
+
+### Predict Age in Test 
+```{r}
+
+pred <- predict(a2.out.f1, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+test_dat1.f$gpb_pred_a2 <- pred[["response_mean"]]
+
+```
+
+
+### Females 2
+```{r}
+# convert data into matrix
+
+data_train <- dff2.f %>%
+  filter(is.na(test)) %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right"), starts_with("Int"), modularity.combat) %>%
+  as.matrix()
+
+data_test <- dff2.f %>%
+  filter(test == 1) %>%
+  select(id, ScanAge, matches("thickness"), matches("left|right"), starts_with("Int"), modularity.combat) %>%
+  as.matrix()
+
+# Define fixed effects predictor variables
+pred_vars <- colnames(data_train)[3:221]
+
+gp_model <- GPModel(group_data = data_train[,"id"], likelihood = "gaussian")
+data_bst <- gpb.Dataset(data = data_train[,pred_vars], label = data_train[,"ScanAge"])
+
+
+```
+
+```{r}
+
+# Find optimal tuning parameters
+opt_params <- gpb.grid.search.tune.parameters(
+  param_grid = param_grid, 
+  params = other_params,
+  num_try_random = NULL, 
+  folds = folds.f2,
+  data = data_bst, 
+  gp_model = gp_model,
+  nrounds = 2000, 
+  early_stopping_rounds = 10,
+  verbose_eval = 1, metric = c("rmse"))
+
+opt_params
+
+```
+
+```{r}
+
+params <- list(learning_rate = 0.01, max_depth = 5, num_leaves = 2^10, min_data_in_leaf = 50, lambda_l2 = 0)
+nrounds <- 916
+gpb.out <- gpb.train(data = data_bst, gp_model = gp_model, 
+                   nrounds = nrounds, params = params, verbose = 1)
+summary(gp_model)
+
+```
+
+### SHAP
+#### Plot
+```{r}
+
+a2.out.f2 <- gpb.out
+mod.a2.f2 <- shap.plot.summary.wrap1(a2.out.f2, X = data_train[,pred_vars], top_n=30) +  ggtitle("SHAP values")
+
+mod.a2.f2
+
+```
+
+### Predict Age in Test 
+```{r}
+
+pred <- predict(a2.out.f2, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+test_dat2.f$gpb_pred_a2 <- pred[["response_mean"]]
+
+```
+
+## A3 Freesurfer Thickness + Subcort + 17 FC integration + Rec
+### Males 1
+```{r}
+# convert data into matrix
+
+data_train <- dff1.m %>%
+  filter(is.na(test)) %>%
+  select(id, ScanAge, matches("thickness"), matches("Left|Right"), starts_with("Int"), starts_with("Rec."), modularity.combat) %>%
+  as.matrix()
+
+data_test <- dff1.m %>%
+  filter(test == 1) %>%
+  select(id, ScanAge, matches("thickness"), matches("Left|Right"), starts_with("Int"), starts_with("Rec."), modularity.combat) %>%
+  as.matrix()
+
+# Define fixed effects predictor variables
+pred_vars <- colnames(data_train)[3:238]
+
+gp_model <- GPModel(group_data = data_train[,"id"], likelihood = "gaussian")
+data_bst <- gpb.Dataset(data = data_train[,pred_vars], label = data_train[,"ScanAge"])
+
+
+```
+
+```{r}
+
+# Find optimal tuning parameters
+opt_params <- gpb.grid.search.tune.parameters(
+  param_grid = param_grid, 
+  params = other_params,
+  num_try_random = NULL, 
+  folds = folds.m1,
+  data = data_bst, 
+  gp_model = gp_model,
+  nrounds = 2000, 
+  early_stopping_rounds = 10,
+  verbose_eval = 1, metric = c("rmse"))
+
+opt_params
+
+```
+
+```{r}
+
+params <- list(learning_rate = 0.01, max_depth = 3, num_leaves = 2^10, min_data_in_leaf = 10, lambda_l2 = 0)
+nrounds <- 289
+gpb.out <- gpb.train(data = data_bst, gp_model = gp_model, 
+                   nrounds = nrounds, params = params, verbose = 1)
+summary(gp_model)
+
+```
+
+### SHAP
+```{r}
+
+a3.out.m1 <- gpb.out
+mod.a3.m1 <- shap.plot.summary.wrap1(a3.out.m1, X = data_train[,pred_vars], top_n=30) +  ggtitle("SHAP values")
+
+mod.a3.m1
+
+```
+
+### Predict Age in Test 
+```{r}
+
+pred <- predict(a3.out.m1, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+test_dat1.m$gpb_pred_a3 <- pred[["response_mean"]]
+
+```
+
+
+### Males 2
+```{r}
+# convert data into matrix
+
+data_train <- dff2.m %>%
+  filter(is.na(test)) %>%
+  select(id, ScanAge, matches("thickness"), matches("Left|Right"), starts_with("Int"), starts_with("Rec."), modularity.combat) %>%
+  as.matrix()
+
+data_test <- dff2.m %>%
+  filter(test == 1) %>%
+  select(id, ScanAge, matches("thickness"), matches("Left|Right"), starts_with("Int"), starts_with("Rec."), modularity.combat) %>%
+  as.matrix()
+
+# Define fixed effects predictor variables
+pred_vars <- colnames(data_train)[3:238]
+
+gp_model <- GPModel(group_data = data_train[,"id"], likelihood = "gaussian")
+data_bst <- gpb.Dataset(data = data_train[,pred_vars], label = data_train[,"ScanAge"])
+
+
+```
+
+```{r}
+
+# Find optimal tuning parameters
+opt_params <- gpb.grid.search.tune.parameters(
+  param_grid = param_grid, 
+  params = other_params,
+  num_try_random = NULL, 
+  folds = folds.m2,
+  data = data_bst, 
+  gp_model = gp_model,
+  nrounds = 2000, 
+  early_stopping_rounds = 10,
+  verbose_eval = 1, metric = c("rmse"))
+
+opt_params
+
+```
+
+```{r}
+
+params <- list(learning_rate = 0.01, max_depth = 3, num_leaves = 2^10, min_data_in_leaf = 10, lambda_l2 = 10)
+nrounds <- 1014
+gpb.out <- gpb.train(data = data_bst, gp_model = gp_model, 
+                   nrounds = nrounds, params = params, verbose = 1)
+summary(gp_model)
+
+```
+
+### SHAP
+```{r}
+
+a3.out.m2 <- gpb.out
+mod.a3.m2 <- shap.plot.summary.wrap1(a3.out.m2, X = data_train[,pred_vars], top_n=30) +  ggtitle("SHAP values")
+
+mod.a3.m2
+
+```
+
+### Predict Age in Test 
+```{r}
+
+pred <- predict(a3.out.m2, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+test_dat2.m$gpb_pred_a3 <- pred[["response_mean"]]
+
+```
+
+### Females 1
+```{r}
+# convert data into matrix
+
+data_train <- dff1.f %>%
+  filter(is.na(test)) %>%
+  select(id, ScanAge, matches("thickness"), matches("Left|Right"), starts_with("Int"), starts_with("Rec."), modularity.combat) %>%
+  as.matrix()
+
+data_test <- dff1.f %>%
+  filter(test == 1) %>%
+  select(id, ScanAge, matches("thickness"), matches("Left|Right"), starts_with("Int"), starts_with("Rec."), modularity.combat) %>%
+  as.matrix()
+
+# Define fixed effects predictor variables
+pred_vars <- colnames(data_train)[3:238]
+
+gp_model <- GPModel(group_data = data_train[,"id"], likelihood = "gaussian")
+data_bst <- gpb.Dataset(data = data_train[,pred_vars], label = data_train[,"ScanAge"])
+
+
+```
+
+```{r}
+
+# Find optimal tuning parameters
+opt_params <- gpb.grid.search.tune.parameters(
+  param_grid = param_grid, 
+  params = other_params,
+  num_try_random = NULL, 
+  folds = folds.f1,
+  data = data_bst, 
+  gp_model = gp_model,
+  nrounds = 2000, 
+  early_stopping_rounds = 10,
+  verbose_eval = 1, metric = c("rmse"))
+
+opt_params
+
+```
+
+
+```{r}
+
+params <- list(learning_rate = 0.01, max_depth = 2, num_leaves = 2^10, min_data_in_leaf = 10, lambda_l2 = 0)
+nrounds <- 642
+gpb.out <- gpb.train(data = data_bst, gp_model = gp_model, 
+                   nrounds = nrounds, params = params, verbose = 1)
+summary(gp_model)
+
+```
+
+### SHAP
+```{r}
+
+a3.out.f1 <- gpb.out
+mod.a3.f1 <- shap.plot.summary.wrap1(a3.out.f1, X = data_train[,pred_vars], top_n=30) +  ggtitle("SHAP values")
+
+mod.a3.f1
+
+```
+
+### Predict Age in Test 
+```{r}
+
+pred <- predict(a3.out.f1, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+test_dat1.f$gpb_pred_a3 <- pred[["response_mean"]]
+
+```
+
+### Females 2
+```{r}
+# convert data into matrix
+
+data_train <- dff2.f %>%
+  filter(is.na(test)) %>%
+  select(id, ScanAge, matches("thickness"), matches("Left|Right"), starts_with("Int"), starts_with("Rec."), modularity.combat) %>%
+  as.matrix()
+
+data_test <- dff2.f %>%
+  filter(test == 1) %>%
+  select(id, ScanAge, matches("thickness"), matches("Left|Right"), starts_with("Int"), starts_with("Rec."), modularity.combat) %>%
+  as.matrix()
+
+# Define fixed effects predictor variables
+pred_vars <- colnames(data_train)[3:238]
+
+gp_model <- GPModel(group_data = data_train[,"id"], likelihood = "gaussian")
+data_bst <- gpb.Dataset(data = data_train[,pred_vars], label = data_train[,"ScanAge"])
+
+
+```
+
+```{r}
+
+# Find optimal tuning parameters
+opt_params <- gpb.grid.search.tune.parameters(
+  param_grid = param_grid, 
+  params = other_params,
+  num_try_random = NULL, 
+  folds = folds.f2,
+  data = data_bst, 
+  gp_model = gp_model,
+  nrounds = 2000, 
+  early_stopping_rounds = 10,
+  verbose_eval = 1, metric = c("rmse"))
+
+opt_params
+
+```
+
+```{r}
+
+params <- list(learning_rate = 0.01, max_depth = 5, num_leaves = 2^10, min_data_in_leaf = 5, lambda_l2 = 50)
+nrounds <- 747
+gpb.out <- gpb.train(data = data_bst, gp_model = gp_model, 
+                   nrounds = nrounds, params = params, verbose = 1)
+summary(gp_model)
+
+```
+
+### SHAP
+```{r}
+
+a3.out.f2 <- gpb.out
+mod.a3.f2 <- shap.plot.summary.wrap1(a3.out.f2, X = data_train[,pred_vars], top_n=30) +  ggtitle("SHAP values")
+
+mod.a3.f2
+
+```
+
+### Predict Age in Test 
+```{r}
+
+pred <- predict(a3.out.f2, 
+                data = data_test[,pred_vars],
+                group_data_pred = data_test[,"id"], 
+                predict_var = FALSE, 
+                pred_latent = FALSE)
+
+test_dat2.f$gpb_pred_a3 <- pred[["response_mean"]]
+
+```
+
+## Write Test Data
+```{r}
+
+test_dat1.f <- test_dat1.f %>%
+  mutate(sex = "Female") %>%
+  mutate(phase = "Early-Childhood")
+
+test_dat2.f <- test_dat2.f %>%
+  mutate(sex = "Female") %>%
+  mutate(phase = "Late-Childhood")
+
+test_dat1.m <- test_dat1.m %>%
+  mutate(sex = "Male") %>%
+  mutate(phase = "Early-Childhood")
+
+test_dat2.m <- test_dat2.m %>%
+  mutate(sex = "Male") %>%
+  mutate(phase = "Late-Childhood")
+
+write.csv(test_dat1.f, '/output/brainage_sep_f1.csv', row.names = FALSE)
+
+write.csv(test_dat2.f, '/output/brainage_sep_f2.csv', row.names = FALSE)
+
+write.csv(test_dat1.m, '/output/brainage_sep_m1.csv', row.names = FALSE)
+
+write.csv(test_dat2.m, '/output/brainage_sep_m2.csv', row.names = FALSE)
+
+```
+
+## Selected A2 Model
+### Save models gpboost
+```{r}
+
+setwd('/output/models')
+
+saveRDS(pred_vars, "a2_pred_vars.rds")
+
+gpb.save(a2.out.m1, "a2_m1_phase.json")
+saveRDS.gpb.Booster(a2.out.m1, "a2_m1_phase.rds")
+
+gpb.save(a2.out.m2, "a2_m2_phase.json")
+saveRDS.gpb.Booster(a2.out.m2, "a2_m2_phase.rds")
+
+gpb.save(a2.out.f1, "a2_f1_phase.json")
+saveRDS.gpb.Booster(a2.out.f1, "a2_f1_phase.rds")
+
+gpb.save(a2.out.f2, "a2_f2_phase.json")
+saveRDS.gpb.Booster(a2.out.f2, "a2_f2_phase.rds")
+
+```
+
+### SHAP values
+### Males Phase 1
+#### Values Train
+```{r}
+shap.a2.m1 <- shap.values(a2.out.m1, X_train = data_train[,pred_vars])
+shap.a2.m1 <- as.data.frame(shap.a2.m1$mean_shap_score)
+shap.a2.m1 <- shap.a2.m1 %>%
+  mutate(region = row.names(.)) %>%
+  rename(mean_shap_score = `shap.a2.m1$mean_shap_score`) %>%
+  mutate(modality = ifelse(
+    str_detect(region, "thickness"), "S-CT", ifelse(
+    str_detect(region, "left|right"), "S-Volume", "F-Integration"  
+    ))) %>%
+  select(region, modality, mean_shap_score)
+
+write_csv(shap.a2.m1, '/output/shap.a2.m1.csv')
+
+```
+
+#### Values Test
+```{r}
+shap.a2.m1_test <- shap.values(a2.out.m1, X_train = data_test[,pred_vars])
+shap.a2.m1_test <- as.data.frame(shap.a2.m1_test$mean_shap_score)
+shap.a2.m1_test <- shap.a2.m1_test %>%
+  mutate(region = row.names(.)) %>%
+  rename(mean_shap_score = `shap.a2.m1_test$mean_shap_score`) %>%
+  mutate(modality = ifelse(
+    str_detect(region, "thickness"), "S-CT", ifelse(
+    str_detect(region, "left|right"), "S-Volume", "F-Integration"  
+    ))) %>%
+  select(region, modality, mean_shap_score)
+
+write_csv(shap.a2.m1_test, '/output/shap.a2.m1_test.csv')
+
+```
+
+### Males Phase 2
+#### Values Train
+```{r}
+
+shap.a2.m2 <- shap.values(a2.out.m2, X_train = data_train[,pred_vars])
+shap.a2.m2 <- as.data.frame(shap.a2.m2$mean_shap_score)
+shap.a2.m2 <- shap.a2.m2 %>%
+  mutate(region = row.names(.)) %>%
+  rename(mean_shap_score = `shap.a2.m2$mean_shap_score`) %>%
+  mutate(modality = ifelse(
+    str_detect(region, "thickness"), "S-CT", ifelse(
+    str_detect(region, "left|right"), "S-Volume", "F-Integration"  
+    ))) %>%
+  select(region, modality, mean_shap_score)
+
+write_csv(shap.a2.m2, '/output/shap.a2.m2.csv')
+
+```
+
+#### Values Test
+```{r}
+shap.a2.m2_test <- shap.values(a2.out.m2, X_train = data_test[,pred_vars])
+shap.a2.m2_test <- as.data.frame(shap.a2.m2_test$mean_shap_score)
+shap.a2.m2_test <- shap.a2.m2_test %>%
+  mutate(region = row.names(.)) %>%
+  rename(mean_shap_score = `shap.a2.m2_test$mean_shap_score`) %>%
+  mutate(modality = ifelse(
+    str_detect(region, "thickness"), "S-CT", ifelse(
+    str_detect(region, "left|right"), "S-Volume", "F-Integration"  
+    ))) %>%
+  select(region, modality, mean_shap_score)
+
+write_csv(shap.a2.m2_test, '/output/shap.a2.m2_test.csv')
+
+```
+
+Females Phase 1
+#### Values Train
+```{r}
+
+shap.a2.f1 <- shap.values(a2.out.f1, X_train = data_train[,pred_vars])
+shap.a2.f1 <- as.data.frame(shap.a2.f1$mean_shap_score)
+shap.a2.f1 <- shap.a2.f1 %>%
+  mutate(region = row.names(.)) %>%
+  rename(mean_shap_score = `shap.a2.f1$mean_shap_score`) %>%
+  mutate(modality = ifelse(
+    str_detect(region, "thickness"), "S-CT", ifelse(
+    str_detect(region, "left|right"), "S-Volume", "F-Integration"  
+    ))) %>%
+  select(region, modality, mean_shap_score)
+
+write_csv(shap.a2.f1, '/output/shap.a2.f1.csv')
+
+```
+
+#### Values Test
+```{r}
+
+shap.a2.f1_test <- shap.values(a2.out.f1, X_train = data_test[,pred_vars])
+shap.a2.f1_test <- as.data.frame(shap.a2.f1_test$mean_shap_score)
+shap.a2.f1_test <- shap.a2.f1_test %>%
+  mutate(region = row.names(.)) %>%
+  rename(mean_shap_score = `shap.a2.f1_test$mean_shap_score`) %>%
+  mutate(modality = ifelse(
+    str_detect(region, "thickness"), "S-CT", ifelse(
+    str_detect(region, "left|right"), "S-Volume", "F-Integration"  
+    ))) %>%
+  select(region, modality, mean_shap_score)
+
+write_csv(shap.a2.f1_test, '/output/shap.a2.f1_test.csv')
+
+```
+
+### Females Phase 2
+#### Values Train
+```{r}
+
+shap.a2.f2 <- shap.values(a2.out.f2, X_train = data_train[,pred_vars])
+shap.a2.f2 <- as.data.frame(shap.a2.f2$mean_shap_score)
+shap.a2.f2 <- shap.a2.f2 %>%
+  mutate(region = row.names(.)) %>%
+  rename(mean_shap_score = `shap.a2.f2$mean_shap_score`) %>%
+  mutate(modality = ifelse(
+    str_detect(region, "thickness"), "S-CT", ifelse(
+    str_detect(region, "left|right"), "S-Volume", "F-Integration"  
+    ))) %>%
+  select(region, modality, mean_shap_score)
+
+write_csv(shap.a2.f2, '/output/shap.a2.f2.csv')
+
+```
+
+#### Values Test
+```{r}
+
+shap.a2.f2_test <- shap.values(a2.out.f2, X_train = data_test[,pred_vars])
+shap.a2.f2_test <- as.data.frame(shap.a2.f2_test$mean_shap_score)
+shap.a2.f2_test <- shap.a2.f2_test %>%
+  mutate(region = row.names(.)) %>%
+  rename(mean_shap_score = `shap.a2.f2_test$mean_shap_score`) %>%
+  mutate(modality = ifelse(
+    str_detect(region, "thickness"), "S-CT", ifelse(
+    str_detect(region, "left|right"), "S-Volume", "F-Integration"  
+    ))) %>%
+  select(region, modality, mean_shap_score)
+
+write_csv(shap.a2.f2_test, '/output/shap.a2.f2_test.csv')
+
+```
