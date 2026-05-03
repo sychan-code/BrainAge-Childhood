@@ -115,7 +115,7 @@ ba_tab_med %>%
 
 ```
 
-### Table - Motion Subset (Supp Table S8)
+## Table - Motion Subset (Supp Table S8)
 ```{r}
 
 test_dat_mot <- test_dat_mot %>%
@@ -194,7 +194,7 @@ ba_tab_mot_med %>%
 ```
 
 
-## Subgroup Comparisons (Supp Fig S3b)
+## Subgroup Comparisons (Supp Fig S4b)
 ```{r}
 
 bage2 <- bage2 %>%
